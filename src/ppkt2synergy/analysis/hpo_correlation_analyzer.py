@@ -7,7 +7,10 @@ from .correlation_type import CorrelationType
 import plotly.graph_objs as go
 import logging
 from os import path
+from tqdm import tqdm
+from statsmodels.stats.multitest import multipletests
 from scipy.sparse import coo_matrix, triu
+from itertools import chain
 
 
 logger = logging.getLogger(__name__)
@@ -37,7 +40,7 @@ class HPOStatisticsAnalyzer:
     """
     def __init__(
             self,  
-            hpo_data: Tuple[pd.DataFrame,Optional[pd.DataFrame]], 
+            hpo_data: Tuple[pd.DataFrame,pd.DataFrame,Optional[pd.DataFrame]], 
             min_individuals_for_correlation_test: int = 30,
             min_cooccurrence_count = 1
         ):
@@ -65,7 +68,7 @@ class HPOStatisticsAnalyzer:
                 ValueError: If min_individuals_for_correlation_test is less than 30.
             """
             if isinstance(hpo_data, tuple):
-                hpo_matrix, relationship_mask = hpo_data
+                hpo_matrix, relationship_mask, pmids_matrix = hpo_data
             else:
                 raise TypeError("hpo_data must be a tuple of (hpo_matrix, relationship_mask)")
             if isinstance(hpo_matrix, pd.DataFrame):
@@ -74,6 +77,9 @@ class HPOStatisticsAnalyzer:
                 self.n_features = hpo_matrix.shape[1]
             else:
                 raise TypeError("hpo_matrix must be a pandas DataFrame")
+            
+            if isinstance(pmids_matrix, pd.DataFrame):
+                self.patient_pmids = pmids_matrix
             
             if not np.all(np.isin(hpo_matrix.to_numpy()[~np.isnan(hpo_matrix.to_numpy())], [0, 1])):
                 raise ValueError("Non-NaN values in HPO Matrix must be either 0 or 1")
@@ -92,8 +98,8 @@ class HPOStatisticsAnalyzer:
                 if not np.all(np.isin(self.relationship_mask[~np.isnan(self.relationship_mask)], [0])):
                     raise ValueError("relationship_mask must contain only 0 or NaN")
             
-            if min_individuals_for_correlation_test < 30:
-                raise ValueError("min_individuals_for_correlation_test must not be less than 30.")
+            #if min_individuals_for_correlation_test < 30:
+            #    raise ValueError("min_individuals_for_correlation_test must not be less than 30.")
             self.min_individuals_for_correlation_test = min_individuals_for_correlation_test
             self.min_coccurrence_count = min_cooccurrence_count
 
@@ -170,7 +176,6 @@ class HPOStatisticsAnalyzer:
                 Optional[Dict[str, Union[float, str]]]:
                     Dictionary with correlation results, or None if invalid or insufficient data.
 
-
             Raises:
                 ValueError: If insufficient data for correlation test or invalid columns (all 0 or 1).
             """
@@ -187,20 +192,24 @@ class HPOStatisticsAnalyzer:
             total = len(col_A_values)
             
             if np.all(col_A_values == col_A_values[0]) or np.all(col_B_values == col_B_values[0]):
-                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0})
+                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
             
             # --- Count co-occurrence ---
             observed_observed = np.sum((col_A_values == 1) & (col_B_values == 1))
             excluded_excluded = np.sum((col_A_values == 0) & (col_B_values == 0))
 
             if observed_observed <= self.min_coccurrence_count or excluded_excluded <= self.min_coccurrence_count:
-                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0})
+                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
 
             try:
                 coef, p_val = self._calculate_pairwise_stats(col_A_values, col_B_values, correlation_type=correlation_type)
-                return (col_A, col_B, coef, p_val, {"00":count_00,"01":count_01,"10":count_10,"11":count_11,"N":total})
+                patient_ids = self.hpo_matrix.index[mask]
+                pmids_list = self.patient_pmids.loc[patient_ids, 'pmids'].to_numpy()
+                all_pmids = set(chain.from_iterable(pmids_list))
+                n_pmids = len(all_pmids)
+                return (col_A, col_B, coef, p_val, {"00":count_00,"01":count_01,"10":count_10,"11":count_11,"N":total,"n_pmid": n_pmids})
             except Exception as e:
-                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0})
+                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
 
     def compute_correlation_matrix(
             self, 
@@ -229,15 +238,17 @@ class HPOStatisticsAnalyzer:
             pd.DataFrame:
                 A DataFrame containing pairwise correlation results.
                 Each row corresponds to one valid pair of HPO terms and includes:
-                    - Feature1 (str): Name of the first HPO term.
-                    - Feature2 (str): Name of the second HPO term.
-                    - Coefficient (float): Correlation coefficient.
-                    - P_value (float): Corresponding p-value.
+                    - HPO_A (str): Name of the first HPO term.
+                    - HPO_B (str): Name of the second HPO term.
+                    - coefficient (float): Correlation coefficient.
+                    - p_value (float): Corresponding p-value (NaN if not applicable).
+                    - p_value_corrected (float): P-value adjusted for multiple testing using the Benjamini–Hochberg FDR method.
                     - Count_00 (int): Number of individuals with (0,0).
                     - Count_01 (int): Number of individuals with (0,1).
                     - Count_10 (int): Number of individuals with (1,0).
                     - Count_11 (int): Number of individuals with (1,1).
-                    - Total (int): Total number of valid individuals.
+                    - n_patients (int): Total number of valid individuals.
+                    - n_pmids (int): Number of PubMed references associated with the pair (if available).
 
         Side Effects:
             - Stores the full correlation coefficient matrix in `self.coef_df`.
@@ -265,16 +276,11 @@ class HPOStatisticsAnalyzer:
             candidate_idx = np.where(counts >= self.min_individuals_for_correlation_test)[0]
 
         rows_cand, cols_cand = rows[candidate_idx], cols[candidate_idx]
-
-        def compute_pair(i, j): 
-            try:
-                return self._calculate_pairwise_correlation(i, j, correlation_type=correlation_type)
-            except Exception:
-                return (i, j, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0})
+        pairs = list(zip(rows_cand, cols_cand))
 
         results = Parallel(n_jobs=n_jobs)(
-            delayed(compute_pair)(i, j)
-            for i, j in zip(rows_cand, cols_cand)
+            delayed(self._calculate_pairwise_correlation)(i, j, correlation_type=correlation_type)
+            for i, j in tqdm(pairs, desc="Calculating pairwise correlation")
         )
         
         matrix = np.full((n_cols, n_cols), np.nan)
@@ -287,22 +293,31 @@ class HPOStatisticsAnalyzer:
             matrix[j, i] = coef
             pvalue_matrix[i, j] = pval
             pvalue_matrix[j, i] = pval
-            f1, f2 = columns[i], columns[j]
+            hpo1, hpo2 = columns[i], columns[j]
             if j > i:  # only upper triangle
                 if not np.isnan(coef):
                     rows.append({
-                        "Feature1": f1,
-                        "Feature2": f2,
-                        "Coefficient": coef,
-                        "P_value": pval,
+                        "HPO_A": hpo1,
+                        "HPO_B": hpo2,
+                        "correlation": coef,
+                        "p_value": pval,
                         "Count_00": counts["00"],
                         "Count_01": counts["01"],
                         "Count_10": counts["10"],
                         "Count_11": counts["11"],
-                        "Total": counts["N"]
+                        "n_patients": counts["N"],
+                        "n_pmids": counts["n_pmid"]
                     }) 
    
         self.correlation_results = pd.DataFrame(rows)
+        if not self.correlation_results.empty:
+            pvals = self.correlation_results["p_value"].values
+            _, pvals_corrected, _, _ = multipletests(pvals, method="fdr_bh")
+            self.correlation_results.insert(
+                self.correlation_results.columns.get_loc("p_value") + 1, 
+                "p_value_corrected",                                       
+                pvals_corrected
+            )
         
         valid_mask = ~(np.isnan(matrix).all(axis=0)) | (np.nan_to_num(matrix, nan=0).sum(axis=0) == 0)
         if len(valid_mask) == 0:
@@ -316,7 +331,10 @@ class HPOStatisticsAnalyzer:
     
     def save_correlation_results(
             self, 
-            output_file: str
+            lower_bound: float=-0.0, 
+            upper_bound: float=0.0,
+            alpha: float = 0.0,
+            output_file: str="correlation_results.csv"
         ) -> None:
         """
         Export the computed correlation results to a file.
@@ -325,6 +343,12 @@ class HPOStatisticsAnalyzer:
         been computed previously by calling `compute_correlation_matrix`.
 
         Args:
+            lower_bound (float):
+                Minimum correlation value to include. 
+            upper_bound (float):
+                Maximum correlation value to include. 
+            alpha (float):
+                Significance threshold for p-values. Only correlations with p < alpha are kept.
             output_file (str):
                 Path to the output file. Supported formats:
                 - ".csv": saves as a CSV file.
@@ -344,21 +368,29 @@ class HPOStatisticsAnalyzer:
         if not hasattr(self, "correlation_results"):
             raise ValueError("Correlation results not computed. Run compute_correlation_matrix() first.")
         
+        df = self.correlation_results.copy()
+
+        if alpha > 0.0 and "p_value" in df.columns:
+            df = df[df["p_value"] < alpha]
+
+        if lower_bound < 0.0 and upper_bound >0.0:
+            df = df[(df["correlation"] <= lower_bound) | (df["correlation"] >= upper_bound)]
+
         ext = path.splitext(output_file)[1].lower()
         if ext not in [".csv", ".xlsx"]:
             raise ValueError(f"Unsupported file format: {ext}. Use '.csv' or '.xlsx'.")
-
-        
+  
         if output_file.endswith(".csv"):
-            self.correlation_results.to_csv(output_file, index=False)
+            df.to_csv(output_file, index=False)
         else:
-            self.correlation_results.to_excel(output_file, index=False)    
+            df.to_excel(output_file, index=False)    
 
     
     def filter_weak_correlations(
             self, 
             lower_bound: float=-0.55, 
-            upper_bound: float=0.55
+            upper_bound: float=0.55,
+            alpha: float = 0.05,
         ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Remove weak correlations from the correlation matrix based on the given threshold.
@@ -370,6 +402,7 @@ class HPOStatisticsAnalyzer:
                 The lower bound for filtering weak correlations.
             upper_bound(float): (default: 0.55)
                 The upper bound for filtering weak correlations.
+            alpha: float = 0.05,
 
         Returns:
             Tuple[pd.DataFrame, pd.DataFrame]:
@@ -384,6 +417,17 @@ class HPOStatisticsAnalyzer:
         mask = (coef_matrix > lower_bound) & (coef_matrix < upper_bound)
         coef_matrix[mask] = np.nan
         p_value[mask] = np.nan
+
+        non_signif = self.correlation_results.loc[
+            self.correlation_results["p_value_corrected"] >= alpha, ["HPO_A", "HPO_B"]
+        ]
+        for _, row in non_signif.iterrows():
+            hpo1, hpo2 = row["HPO_A"], row["HPO_B"]
+            if hpo1 in coef_matrix.index and hpo2 in coef_matrix.columns:
+                coef_matrix.loc[hpo1, hpo2] = np.nan
+                coef_matrix.loc[hpo2, hpo1] = np.nan
+                p_value.loc[hpo1, hpo2] = np.nan
+                p_value.loc[hpo2, hpo1] = np.nan
     
         mask_rows = coef_matrix.isna().all(axis=1)
         mask_cols = coef_matrix.isna().all(axis=0)
@@ -398,6 +442,7 @@ class HPOStatisticsAnalyzer:
             stats_name: str = "spearman",
             lower_bound: float = -0.55,
             upper_bound: float = 0.55,
+            alpha: float = 0.05,
             title_name: str = "",
         ) -> go.Figure:
         """
@@ -411,6 +456,8 @@ class HPOStatisticsAnalyzer:
                 Lower threshold to filter out weak correlations.
             upper_bound (float): 
                 Upper threshold to filter out weak correlations.
+            alpha (float): (default: 0.05)
+                Significance threshold for P-value.
             title_name (str): 
                 Optional subtitle to display under the main title.
 
@@ -434,7 +481,8 @@ class HPOStatisticsAnalyzer:
         # --- Compute correlation and filter weak correlations ---
         coef_matrix, pval_matrix = self.filter_weak_correlations(
             lower_bound=lower_bound,
-            upper_bound=upper_bound
+            upper_bound=upper_bound,
+            alpha=alpha,
         )
 
         if coef_matrix.empty or np.isnan(coef_matrix.values).all():
@@ -464,24 +512,28 @@ class HPOStatisticsAnalyzer:
         counts_lookup = {}
         for row in self.correlation_results.itertuples():
             # forward (original counts)
-            counts_lookup[(row.Feature1, row.Feature2)] = {
-                "Coefficient": row.Coefficient,
-                "P_value": row.P_value,
+            counts_lookup[(row.HPO_A, row.HPO_B)] = {
+                "Coefficient": row.correlation,
+                "P_value": row.p_value,
+                "P_value_corrected": row.p_value_corrected,
                 "Count_00": row.Count_00,
                 "Count_01": row.Count_01,
                 "Count_10": row.Count_10,
                 "Count_11": row.Count_11,
-                "Total": row.Total,
+                "n_patients": row.n_patients,
+                "n_pmids": row.n_pmids
             }
             # backward (exchange Count_01 和 Count_10)
-            counts_lookup[(row.Feature2, row.Feature1)] = {
-                "Coefficient": row.Coefficient,
-                "P_value": row.P_value,
+            counts_lookup[(row.HPO_B, row.HPO_A)] = {
+                "Coefficient": row.correlation,
+                "P_value": row.p_value,
+                "P_value_corrected": row.p_value_corrected,
                 "Count_00": row.Count_00,
                 "Count_01": row.Count_10,  # swapped
                 "Count_10": row.Count_01,  # swapped
                 "Count_11": row.Count_11,
-                "Total": row.Total,
+                "n_patients": row.n_patients,
+                "n_pmids": row.n_pmids
             }
 
 
@@ -496,13 +548,15 @@ class HPOStatisticsAnalyzer:
                 else:
                     counts = counts_lookup.get((row, col), {})
                     hover_row.append(
-                        f"<b>X1</b>: {col}<br><b>X2</b>: {row}<br>"
+                        f"<b>HPO_A</b>: {col}<br><b>HPO_B</b>: {row}<br>"
                         f"<b>Corr</b>: {coef:.2f}<br><b>p-val</b>: {pval:.6f}<br>"
-                        f"<b>Counts</b>: 00={counts.get('Count_00', 0)}, "
-                        f"01={counts.get('Count_01', 0)}, "
-                        f"10={counts.get('Count_10', 0)}, "
-                        f"11={counts.get('Count_11', 0)}<br>"
-                        f"<b>Total</b>: {counts.get('Total', 0)}"
+                        f"<b>p-val_corrected</b>: {counts.get('P_value_corrected', np.nan):.6f}<br>"
+                        f"<b>Counts_00</b>: {counts.get('Count_00', 0)}, "
+                        f"<b>Counts_01</b>:{counts.get('Count_01', 0)}, "
+                        f"<b>Counts_10</b>:={counts.get('Count_10', 0)}, "
+                        f"<b>Counts_11</b>:{counts.get('Count_11', 0)}<br>"
+                        f"<b>Total patients</b>: {counts.get('n_patients', 0)}<br>"
+                        f"<b>PMIDs</b>: {counts.get('n_pmids', 0)}"
                     )
             hover_text.append(hover_row)
           

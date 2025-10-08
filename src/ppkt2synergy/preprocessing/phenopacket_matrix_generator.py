@@ -1,6 +1,6 @@
 import pandas as pd
 import phenopackets as ppkt
-from typing import List, Union, IO, Tuple, Callable, Optional, Iterable,Dict
+from typing import List, Union, IO, Tuple, Callable, Optional, Dict
 from gpsea.preprocessing import configure_caching_cohort_creator, load_phenopackets
 from gpsea.analysis.clf import monoallelic_classifier
 from gpsea.model import VariantEffect
@@ -68,6 +68,7 @@ class PhenopacketMatrixGenerator:
         else:
             self.hpo_hierarchy = hpo_hierarchy
         self.hpo_term_observation_matrix = self._generate_hpo_term_status_matrix()
+        self.annotation_matrix = self._generate_annotation_matrix()
         self.target_matrix, self.target_labels = self._compute_target()
 
 
@@ -105,6 +106,40 @@ class PhenopacketMatrixGenerator:
             ],
             propagate_hierarchy=propagate_hierarchy,
         )
+    
+    def _generate_annotation_matrix(
+            self
+        ) -> pd.DataFrame:
+        """
+        Constructs an annotation matrix for patients, containing metadata such as PMIDs
+        (from externalReferences). Can be extended with cohort, age, etc.
+
+        Rows: patient IDs
+        Columns: Metadata attributes (pmids, ...)
+        Values:
+            - pmids → List of PubMed IDs (object type column)
+        Returns:
+            pd.DataFrame: Annotation matrix with patient metadata.
+        """
+        annotations = {}
+
+        for ppkt in self.phenopackets:
+            row = {}
+
+            # PMIDs
+            pmids = []
+            meta = ppkt.meta_data
+            for ref in meta.external_references:
+                if hasattr(ref, "id") and ref.id.startswith("PMID:"):
+                    pmids.append(ref.id.replace("PMID:", ""))
+            row["pmids"] = sorted(set(pmids))           
+            annotations[ppkt.id] = row
+
+        annotation_matrix = pd.DataFrame.from_dict(
+            annotations, orient="index"
+        ).reindex(self.patient_index)
+
+        return annotation_matrix
 
 
     def _generate_disease_status_matrix(
@@ -153,7 +188,7 @@ class PhenopacketMatrixGenerator:
                 - A mapping from feature IDs to their labels
         """
         feature_ids, status_data = set(), {}
-
+            
         for phenopacket in self.phenopackets:
             status_data[phenopacket.id] = {}
             for f_id, value in feature_extractor(phenopacket):
@@ -170,36 +205,6 @@ class PhenopacketMatrixGenerator:
             matrix = self.hpo_hierarchy.propagate_hpo_hierarchy(matrix)
 
         return matrix
-
-    
-    def _generate_sex_matrix(
-            self
-        ) -> Tuple[pd.DataFrame, Dict[str, str]]:
-        """
-        Creates a binary sex matrix with:
-
-        Values:
-        - 1 → Male
-        - 0 → Female
-        - NaN → Unknown, Other, or missing
-
-        Returns:
-            Tuple[pd.DataFrame, Dict[str, str]]:
-                - Matrix with one column: 'sex'.
-                - Label mapping for column.
-        """
-        sex_data = {}
-
-        for ppkt in self.phenopackets:
-            if ppkt.subject.sex == 'MALE':
-                sex_data[ppkt.id] = 1
-            elif ppkt.subject.sex == 'FEMALE':
-                sex_data[ppkt.id] = 0
-            else:
-                sex_data[ppkt.id] = float('nan')
-
-        sex_matrix = pd.DataFrame.from_dict(sex_data, orient='index', columns=['sex']).reindex(self.patient_index)
-        return sex_matrix, {'sex': 'sex'}
     
 
     def _process_variant_effects(
@@ -266,12 +271,11 @@ class PhenopacketMatrixGenerator:
 
         Returns:
             Tuple[pd.DataFrame, Dict[str, str]]: 
-            - Target matrix with disease status, sex, and optional variant effects
+            - Target matrix with disease status, optional variant effects and external targets.
             - Mapping from column names to descriptive labels
         """
         disease_matrix= self._generate_disease_status_matrix()
         disease_matrix =disease_matrix.fillna(0)
-        sex_matrix, sex_labels = self._generate_sex_matrix()
 
         variant_effects_matrix, variant_labels = None, {}
         if self.variant_effect_type and self.mane_tx_id:
@@ -282,7 +286,6 @@ class PhenopacketMatrixGenerator:
         # Collect matrices to combine (note: disease_labels will be added later)
         matrices = [
             (disease_matrix, {}), # disease_labels to be added in the next step
-            (sex_matrix, sex_labels),
         ]
         if variant_effects_matrix is not None:
             matrices.append((variant_effects_matrix, variant_labels))
