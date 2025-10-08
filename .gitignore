@@ -167,3 +167,4 @@ cython_debug/
 **.xlsx  
 .idea/
 **/.gpsea_cache/
+docs/api/
