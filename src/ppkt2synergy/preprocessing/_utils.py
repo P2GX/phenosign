@@ -226,7 +226,7 @@ class HPOHierarchyUtils:
             terms: Union[pd.Index, Sequence[str]]
         ) -> pd.DataFrame:
         """
-        Build a term × term mask matrix where each cell is set to NaN if the two terms
+        Build a term * term mask matrix where each cell is set to NaN if the two terms
         have a hierarchical relationship (i.e., one is an ancestor or descendant of the other),
         and 0 otherwise.
 
@@ -234,7 +234,7 @@ class HPOHierarchyUtils:
             terms (List): A list of HPO term IDs to include in the mask.
 
         Returns:
-            pd.DataFrame: A square DataFrame (terms × terms) where:
+            pd.DataFrame: A square DataFrame (terms * terms) where:
                         - cell (i, j) is NaN if term_i and term_j are hierarchically related;
                         - otherwise, the value is 0.
         """

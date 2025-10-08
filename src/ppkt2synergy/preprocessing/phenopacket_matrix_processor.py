@@ -24,7 +24,7 @@ class PhenopacketMatrixProcessor:
                 threshold=0.5,
                 mode='leaf',
                 use_label=True,
-            target_name=None)
+                target_name=None)
     """
 
     def __init__(self):
@@ -37,7 +37,7 @@ class PhenopacketMatrixProcessor:
             variant_effect_type: Optional[VariantEffect] = None,
             mane_tx_id: Optional[Union[str, List[str]]] = None,
             external_target_matrix: Optional[pd.DataFrame] = None, 
-            threshold: float = 0.5, 
+            threshold: float = 0, 
             mode: Optional[str] = None,
             use_label: bool = True,
             nan_strategy: Optional[str] = None,
@@ -64,7 +64,7 @@ class PhenopacketMatrixProcessor:
             external_target_matrix (Optional[pd.DataFrame]): (default: None)
                 User-provided binary matrix (indexed by patient ID). 
                 Columns with only valid values (0, 1, or NaN) are merged into the final target matrix; others are skipped with a warning. 
-            threshold (float): (default: 0.5)
+            threshold (float): (default: 0)
                 Maximum allowed proportion of NaN values. Columns exceeding this threshold are dropped. 
             mode (str, default 'leaf'): (default: 'None')
                 Determines which HPO terms to retain based on ontology hierarchy.
@@ -79,12 +79,13 @@ class PhenopacketMatrixProcessor:
                 - None: keep NaNs for downstream analysis
         Returns:
             Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]:
-            - `final_matrix`: filtered HPO observation matrix (patients × HPO terms)
-            - `target_matrix`: binary target matrix (patients × labels or variant effects)
+            - `final_matrix` (pd.DataFrame): filtered HPO observation matrix (patients × HPO terms)
+            - `patient_pmids` (pd.DataFrame): DataFrame mapping each patient to their associated PMIDs.
             - `relationship_mask` (optional): if `mode` is None, returns a term × term DataFrame where:
                 - entries are `NaN` if two terms are hierarchically related (ancestor/descendant)
                 - entries are `1` if the terms are independent (no hierarchical relationship)
-              Otherwise, returns `None`.
+               Otherwise, returns `None`.
+            - `target_matrix` (pd.DataFrame): binary target matrix (patients × labels or variant effects)
 
         Raises:
             ValueError: 
@@ -110,6 +111,7 @@ class PhenopacketMatrixProcessor:
         
         hpo_matrix = data_generator.hpo_term_observation_matrix
         target_matrix = data_generator.target_matrix
+        annotation_matrix = data_generator.annotation_matrix
 
         hpo_matrix_filtered = hpo_matrix.dropna(axis=1, thresh=int(threshold * len(hpo_matrix)))
 
@@ -134,9 +136,9 @@ class PhenopacketMatrixProcessor:
         if use_label:
             final_matrix = PhenopacketMatrixProcessor._apply_labels(final_matrix, data_generator, classifier)
             target_matrix = PhenopacketMatrixProcessor._apply_labels(target_matrix, data_generator, classifier)
-            #relationship_mask = PhenopacketMatrixProcessor._apply_labels(relationship_mask, data_generator,, classifier) if mode is None else None
+            relationship_mask = PhenopacketMatrixProcessor._apply_labels(relationship_mask, data_generator, classifier) if mode is None else None
 
-        return ((final_matrix, relationship_mask  if mode is None else None), target_matrix) 
+        return ((final_matrix, relationship_mask  if mode is None else None,annotation_matrix), target_matrix)
 
 
     @staticmethod
