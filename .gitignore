@@ -163,6 +163,8 @@ cython_debug/
 
 
 .vscode/
-# Ignore gpsea variant cache files
-src/ppkt2synergy/.gpsea_cache/
-
+**/*.html
+**.xlsx  
+.idea/
+**/.gpsea_cache/
+docs/api/

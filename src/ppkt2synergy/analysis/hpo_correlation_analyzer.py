@@ -552,9 +552,9 @@ class HPOStatisticsAnalyzer:
                         f"<b>Corr</b>: {coef:.2f}<br><b>p-val</b>: {pval:.6f}<br>"
                         f"<b>p-val_corrected</b>: {counts.get('P_value_corrected', np.nan):.6f}<br>"
                         f"<b>Counts_ab</b>: {counts.get('Count_00', 0)}, "
-                        f"<b>Counts_aB</b>:{counts.get('Count_01', 0)}, "
-                        f"<b>Counts_Ab</b>:{counts.get('Count_10', 0)}, "
-                        f"<b>Counts_AB</b>:{counts.get('Count_11', 0)}<br>"
+                        f"<b>Counts_aB</b>: {counts.get('Count_01', 0)}, "
+                        f"<b>Counts_Ab</b>: {counts.get('Count_10', 0)}, "
+                        f"<b>Counts_AB</b>: {counts.get('Count_11', 0)}<br>"
                         f"<b>Total patients</b>: {counts.get('n_patients', 0)}<br>"
                         f"<b>PMIDs</b>: {counts.get('n_pmids', 0)}"
                     )
