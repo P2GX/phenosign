@@ -27,3 +27,12 @@ To start a local server, enter:
 mkdocs serve
 ```
  
+
+# PyPI release
+
+Install the packages build and twine. Then
+
+```bash
+python -m build
+python -m twine upload dist/*
+```
