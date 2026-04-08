@@ -1,89 +1,145 @@
-from typing import List, Dict, Set, Union, IO, Optional, Tuple, Sequence
-from ..io import load_hpo,CohortDataLoader
+from typing import Dict, Set, Union, IO, Sequence
+from ..io import load_hpo
 import pandas as pd
 import numpy as np
 import logging
+logger= logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
-
-class HPOHierarchyUtils:
+class HPOTermManager:
     """
-    Utility class for handling hierarchical relationships between HPO terms.
+    Manage HPO terms and cache their hierarchical relationships.
 
-    Main functionalities:
-    1. Propagate observed (1) and excluded (0) HPO term annotations in a sample × HPO matrix,
-    respecting the HPO ontology structure.
-    2. Classify a given set of HPO terms into subtrees rooted at top-level terms.
-    3. Identify hierarchical conflicts in observed/excluded data.
-    4. Provide utility functions for hierarchical masking and term labeling.
-        print(result)
-        # Output:
-        # {
-        #     'HP:0004322': {'terms': ['HP:0004322', 'HP:0012758'], 'leaves': ['HP:0012758']},
-        #     'HP:0001250': {'terms': ['HP:0001250'], 'leaves': ['HP:0001250']}
-        # }
+    This class provides utilities for:
+    - Resolving HPO term IDs to their canonical (primary) IDs
+    - Caching ancestor and descendant relationships
+    - Avoiding repeated ontology graph queries
     """
 
     def __init__(
-            self,
-            hpo_file: Optional[Union[str, IO]] = None
+            self, 
+            hpo_file: str| IO | None = None, 
+            release: str | None = None
         ):
         """
-        Initialize the HPOHierarchyUtils with an HPO ontology.
+        Initialize the HPO term manager.
 
         Args:
-            hpo_file: One of the following:
-                - Path to an HPO OBO file (.obo or .json)
-                - Open file-like object
-                - None (loads the latest HPO version by default)
-
-        Raises:
-            ValueError: If loading the HPO ontology fails.
+        hpo_file : str or IO, optional
+            Path or file-like object for a local HPO ontology file.
+        release : str, optional
+            Specific HPO release version to load.
+            If None, the latest release is used.
         """
-        try:
-            self.hpo = load_hpo(hpo_file)
-        except Exception as e:
-            raise ValueError(f"Failed to load HPO ontology: {e}")
-            
-        # Cache ancestors and descendants of terms to avoid repeated queries
+        self.hpo = load_hpo(file = hpo_file, release = release)
+
+        # Cache for ontology relationships
         self._ancestor_cache: Dict[str, Set[str]] = {}
         self._descendant_cache: Dict[str, Set[str]] = {}
-        self._current_terms: Set[str] = set()
+        self._label_cache: Dict[str, str] = {}  # Cache for resolved term IDs
+        self._id_mapping_cache: Dict[str, str] = {}  # Cache for term ID resolutions
 
-    def _validate_term(
-            self, 
-            term: str
-        ) -> bool:
-        """Check if term exists in ontology."""
-        return term in self.hpo
     
+    def _resolve_term_id(
+            self, 
+            term_id: str
+        ) -> str:
+        """
+        Resolve an HPO term ID to its canonical primary ID.
 
-    def _cache_term_relations(
+        Args:
+            term_id : str
+                HPO term ID (e.g., "HP:0001250").
+
+        Returns:
+            str:
+                Canonical HPO term ID.
+        """
+        term = self.hpo.get_term(term_id=term_id)
+        if not term:
+            raise ValueError(
+                f"Term ID '{term_id}' not found in HPO ontology."
+            )
+        
+        return term.identifier.value
+        
+    
+    def prepare_terms(
             self, 
             terms: Set[str]
-        ) -> None:
+        ) -> Set[str]:
         """
-        Incrementally prepare term caches:
-        - Add only new, valid terms.
-        - Cache their ancestors and descendants.
-        - Update self._current_terms without overwriting existing ones.
-        """
-        self._current_terms = {t for t in terms if self._validate_term(t)} 
+        Resolve, validate, and cache HPO terms.
+        Invalid terms are skipped with a warning.
 
-        for term in self._current_terms:
-            if term not in self._ancestor_cache:
-                try:
-                    self._ancestor_cache[term] = {a.value for a in self.hpo.graph.get_ancestors(term)}
-                except Exception as e:
-                    logger.warning(f"Warning: failed to get ancestors for term {term}: {e}")
-                    self._ancestor_cache[term] = set()
-            if term not in self._descendant_cache:
-                try:
-                    self._descendant_cache[term] = {d.value for d in self.hpo.graph.get_descendants(term)}
-                except Exception as e:
-                    logger.warning(f"Warning: failed to get descendants for term {term}: {e}")
-                    self._descendant_cache[term] = set()
+        Args:
+            terms: set[str]
+                Input HPO term IDs.
+
+        Returns:
+            set[str]:
+                Valid canonical HPO term IDs.
+        """
+        resolved_terms = set()
+        for term in terms:
+            try:
+                primary_id = self._resolve_term_id(term)
+                if primary_id != term:
+                    logger.info(f"Resolved term ID '{term}' to primary ID '{primary_id}'")
+                resolved_terms.add(primary_id)
+                self._id_mapping_cache[term] = primary_id
+                if primary_id not in self._label_cache:
+                    self._label_cache[primary_id] = self.hpo.get_term(term_id=primary_id).name
+            except ValueError as e:
+                logger.warning(f"Warning: {e} — skipping term '{term}'")
+
+        new_terms = resolved_terms - self._ancestor_cache.keys()
+        for term in new_terms:
+            try:
+                self._ancestor_cache[term] = {a.value for a in self.hpo.graph.get_ancestors(term)}
+            except Exception as e:
+                logger.warning(f"Warning: {e}")
+                self._ancestor_cache[term] = set()
+            
+            try:
+                self._descendant_cache[term] = {d.value for d in self.hpo.graph.get_descendants(term)}
+            except Exception as e:
+                logger.warning(f"Warning: {e}")
+                self._descendant_cache[term] = set()
+        return resolved_terms
+
+    def get_ancestors(self, term: str) -> Set[str]:
+        """Return cached ancestors of a term."""
+        return self._ancestor_cache.get(term, set())
+
+    def get_descendants(self, term: str) -> Set[str]:
+        """Return cached descendants of a term."""
+        return self._descendant_cache.get(term, set())
     
+    def get_labels(self) -> Dict[str, str]:
+        """Return cached labels."""
+        return self._label_cache
+    
+    def get_id_mapping(self) -> Dict[str, str]:
+        """Return cached term ID mappings."""
+        return self._id_mapping_cache
+
+class HPOHierarchyEngine:
+    """
+    Provides hierarchical operations on HPO term matrices using an HPOTermManager.
+
+    This class offers:
+    - Propagation of observed/excluded HPO term values along the ontology hierarchy.
+      * Observed (1) values propagate to all ancestor terms.
+      * Excluded (0) values propagate to all descendant terms.
+    - Construction of hierarchical relationship masks between HPO terms.
+    
+    It ensures that only valid HPO terms (present in the ontology) are considered.
+    Invalid terms are automatically removed during processing.
+    """
+    def __init__(self, 
+                 hpo_file: str | IO | None = None, 
+                 release: str | None = None):
+        self.tm = HPOTermManager(hpo_file=hpo_file, release=release)
 
     def propagate_hpo_hierarchy(
             self, 
@@ -121,200 +177,95 @@ class HPOHierarchyUtils:
             pd.DataFrame: 
                 Matrix with propagated values.
         """
-        terms = set(matrix.columns)
-        self._cache_term_relations(terms)
+        matrix = matrix.copy()
 
-        invalid_terms = terms - self._current_terms
-        if invalid_terms:
-            matrix = matrix.copy().drop(columns=invalid_terms)
+        terms_old = set(matrix.columns)
+        valid_terms = self.tm.prepare_terms(terms_old)
 
-        for term in self._current_terms:
+        id_mapping = self.tm.get_id_mapping()
+        matrix = matrix.rename(columns=id_mapping)
+
+        matrix = matrix.loc[:, matrix.columns.isin(valid_terms)] # delete invalid terms if not in ontology
+        matrix = matrix.T.groupby(level=0).max().T # delete duplicate columns if multiple input terms map to same primary term
+
+        valid_terms = list(matrix.columns)
+
+        for term in valid_terms:
             # ---- Propagate observed (1) values upwards ----
-            ancestors = self._ancestor_cache.get(term, set())
-            valid_ancestors = ancestors & self._current_terms
+            ancestors = self.tm.get_ancestors(term)
+            valid_ancestors = ancestors & set(valid_terms)
             if valid_ancestors:
                 mask = matrix[term] == 1
                 for anc in valid_ancestors:
                     conflict_mask = mask & (matrix[anc] == 0)
                     if conflict_mask.any():
-                        conflict_indices = matrix.index[conflict_mask].tolist()
-                        logger.warning(f"[Conflict] Term {anc} is an ancestor of {term}, but in these samples {term}=1 and {anc}=0: {conflict_indices}")
+                        logger.warning(
+                            f"[Conflict] {conflict_mask.sum()} samples: {term}=1 but {anc}=0"
+                        )
                     # Only assign where target is NaN
                     update_mask = mask & (matrix[anc].isna())
                     matrix.loc[update_mask, anc] = 1
 
             # ---- Propagate excluded (0) values downwards ----
-            descendants = self._descendant_cache.get(term, set())
-            valid_descendants = descendants & self._current_terms
+            descendants = self.tm.get_descendants(term)
+            valid_descendants = descendants & set(valid_terms)
             if valid_descendants:
                 mask = matrix[term] == 0
                 for desc in valid_descendants:
                     conflict_mask = mask & (matrix[desc] == 1)
                     if conflict_mask.any():
-                        conflict_indices = matrix.index[conflict_mask].tolist()
-                        logger.warning(f"[Conflict] Term {desc} is a descendant of {term}, but in these samples {term}=0 and {desc}=1: {conflict_indices}")
+                        logger.warning(
+                            f"[Conflict] {conflict_mask.sum()} samples: {term}=0 but {desc}=1"
+                        )
                     # Only assign where target is NaN
                     update_mask = mask & (matrix[desc].isna())
                     matrix.loc[update_mask, desc] = 0
-        return matrix 
- 
-
-    def classify_terms(
-            self, 
-            terms: Set[str]
-        ) -> Dict[str, Dict[str, List[str]]]:
-        """
-        Classify given HPO terms into subtrees defined by root terms.
-
-        Root terms: terms with no ancestors within the set.
-        Leaf terms: terms with no descendants within the set.
-
-        Args:
-            terms(Set[str]): 
-                A set of HPO term IDs.
-
-        Returns:
-            Dict[str, Dict[str, List[str]]]: 
-                - "terms": All terms in the subtree.
-                - "leaves": Leaf terms in the subtree.
-        """
-        self._cache_term_relations(terms)
-        roots = self._find_roots(terms)
-        results = {}
-        for root in roots:
-            subtree = self._get_subtree_terms(root, terms)
-            results[root] = {
-                "terms": sorted(list(subtree)),
-                "leaves": sorted(self._extract_leaves(subtree, terms))
-            }
-        return results
-
-    def _find_roots(
-            self, 
-            terms: Set[str]
-        ) -> List[str]:
-        """ Finds root terms (terms with no ancestors in the given set). """
-        return [t for t in terms if not any(a in terms for a in self._ancestor_cache.get(t, set()))]
-
-    def _get_subtree_terms(
-            self, 
-            root: str, 
-            terms: Set[str]
-        ) -> Set[str]:
-        """ Collects all terms under a given root. """
-        subtree = set()
-        stack = [root]
-        while stack:
-            term = stack.pop()
-            if term not in subtree:
-                subtree.add(term)
-                stack.extend(d for d in self._descendant_cache.get(term, set()) if d in terms)
-        return subtree
-
-    def _extract_leaves(
-            self, 
-            subtree: Set[str], 
-            terms: Set[str]
-        ) -> List[str]:
-        """ Finds leaf terms (terms with no descendants in the given set). """
-        return [t for t in subtree if not any(d in terms for d in self._descendant_cache.get(t, set()))]
+        return matrix    
     
-    
-
     def build_relationship_mask(
             self, 
             terms: Union[pd.Index, Sequence[str]]
         ) -> pd.DataFrame:
         """
-        Build a term * term mask matrix where each cell is set to NaN if the two terms
-        have a hierarchical relationship (i.e., one is an ancestor or descendant of the other),
-        and 0 otherwise.
+        Build a hierarchical relationship mask for a set of HPO terms.
+
+        The returned matrix has:
+        - NaN where terms are related (ancestor/descendant relationship, including self-relations).
+        - 0 where terms are unrelated.
 
         Args:
-            terms (List): A list of HPO term IDs to include in the mask.
+            terms (pd.Index or Sequence[str]):
+                List of HPO term IDs to include in the mask.
 
         Returns:
-            pd.DataFrame: A square DataFrame (terms * terms) where:
-                        - cell (i, j) is NaN if term_i and term_j are hierarchically related;
-                        - otherwise, the value is 0.
+            pd.DataFrame:
+                Square matrix (terms x terms) with NaN for related terms
+                and 0 for unrelated terms.
+
+        Example:
+            Terms: [HP:0001250, HP:0004322, HP:0012759]
+
+            Mask:
+                           HP:0001250  HP:0004322  HP:0012759
+            HP:0001250        NaN         NaN          NaN
+            HP:0004322        NaN         NaN          NaN
+            HP:0012759        NaN         NaN          NaN
         """
         terms = list(terms)
         # Initialize a matrix filled with 0s; it will be updated to 1 or NaN later.
         mask = pd.DataFrame(0, index=terms, columns=terms, dtype=float)
-
-        # Ensure ancestor and descendant relationships are cached for these terms
-        self._cache_term_relations(terms)
-
-        nan_positions = set()
+        self.tm.prepare_terms(set(terms))  # Ensure terms are valid and cache relationships
         for term in terms:
-            related = (self._ancestor_cache[term] | self._descendant_cache[term]) & set(terms)
-            nan_positions.update({(term, rel) for rel in related})
-            nan_positions.update({(rel, term) for rel in related})
-            nan_positions.add((term, term))
-        
-        for r, c in nan_positions:
-            mask.loc[r, c] = np.nan
+            if term not in terms:
+                continue
+            related = (self.tm.get_ancestors(term) | self.tm.get_descendants(term)) & set(terms)
+            for rel in related:
+                mask.loc[term, rel] = np.nan
+                mask.loc[rel, term] = np.nan
+            mask.loc[term, term] = np.nan
 
         return mask
     
-
-    def create_hpo_and_disease_labels(
-            self,
-        ) -> Tuple[Dict[str, str], Dict[str, str]]:
-        """
-        Build up-to-date HPO and disease label mappings from phenopackets using the latest HPO ontology.
-
-        Returns:
-            A tuple of two dictionaries:
-                - hpo_labels: A dictionary mapping HPO IDs to term labels.
-                - disease_labels: A dictionary mapping disease IDs to disease names (from phenopackets).
-        """
-        all_phenopackets = CohortDataLoader.from_ppkt_store()
-
-        hpo_labels = {}
-        disease_labels = {}
-
-        for ppkt in all_phenopackets:
-            for feature in ppkt.phenotypic_features:
-                if feature.type and feature.type.id:
-                    hpo_id = feature.type.id
-                    term_name = self.hpo.get_term_name(hpo_id)
-                    if term_name:
-                        hpo_labels[hpo_id] = term_name
-                    else:
-                        logger.warning(f"HPO term not found in ontology: {hpo_id} — using ID as label")
-                        hpo_labels[hpo_id] = hpo_id  # fallback to ID
-
-            for disease in ppkt.diseases:
-                if disease.term and disease.term.id:
-                    disease_id = disease.term.id
-                    label = disease.term.label or disease_id
-                    if disease.term.label is None:
-                        logger.warning(f"Disease label missing for: {disease_id} — using ID as label")
-                    disease_labels[disease_id] = label
-
-        return hpo_labels, disease_labels
-
-
-
-   
-
-
-    
-
-
-        
-        
-
-
-
-        
-    
-
-    
-
-
-
-
-    
-
+    def get_labels(self) -> Dict[str, str]:
+        """Return cached labels."""
+        return self.tm.get_labels()

@@ -1,8 +1,7 @@
 import pytest
 import phenopackets as ppkt
 import pandas as pd
-from unittest.mock import patch
-from ppkt2synergy import PhenopacketMatrixGenerator
+from ppkt2synergy import HPOHierarchyEngine, PhenopacketMatrixBuilder
 import pathlib
 
 TEST_DIR = pathlib.Path(__file__).parent.parent.resolve()
@@ -43,20 +42,21 @@ def mock_phenopackets():
         )
     ]
 
-def test_hpo_and_disease_matrix( mock_phenopackets):
+@pytest.fixture
+def hpo_engine():
+    return HPOHierarchyEngine(hpo_file=str(HP_JSON_FILE))
 
-    matrix_generator = PhenopacketMatrixGenerator(mock_phenopackets, hpo_file=str(HP_JSON_FILE))
+def test_hpo_and_disease_matrix( mock_phenopackets, hpo_engine):
 
-    hpo_matrix_no_propagation = matrix_generator._generate_hpo_term_status_matrix(propagate_hierarchy=False)
-    assert isinstance(hpo_matrix_no_propagation, pd.DataFrame)
-    assert hpo_matrix_no_propagation.loc["Patient_1", "HP:0020219"] == 1
-    assert pd.isna(hpo_matrix_no_propagation.loc["Patient_1", "HP:0001250"])
+    matrix_generator = PhenopacketMatrixBuilder(mock_phenopackets, hpo_hierarchy=hpo_engine)
 
-    hpo_matrix_with_propagation = matrix_generator._generate_hpo_term_status_matrix(propagate_hierarchy=True)
+    hpo_matrix_with_propagation = matrix_generator.generate_hpo_matrix()
     assert isinstance(hpo_matrix_with_propagation, pd.DataFrame)
     assert hpo_matrix_with_propagation.loc["Patient_1", "HP:0001250"] == 1
 
-    disease_matrix = matrix_generator._generate_disease_status_matrix()
+    disease_matrix = matrix_generator.generate_disease_matrix()
     assert isinstance(disease_matrix, pd.DataFrame)
-    assert disease_matrix.loc["Patient_1", "OMIM:101600"] == 1
-    assert pd.isna(disease_matrix.loc["Patient_1", "OMIM:603903"])
+    assert disease_matrix.loc["Patient_1", "Marfan Syndrome"] == 1
+    assert disease_matrix.loc["Patient_3", "Marfan Syndrome"] == 1
+    assert disease_matrix.loc["Patient_1", "Ehlers-Danlos syndrome"] != 1
+    assert disease_matrix.loc["Patient_2", "Ehlers-Danlos syndrome"] == 1
