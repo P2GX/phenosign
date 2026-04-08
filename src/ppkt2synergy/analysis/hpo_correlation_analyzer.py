@@ -81,7 +81,14 @@ class HPOStatisticsAnalyzer:
             self.n_features = self.hpo_matrix.shape[1]
             self.patient_pmids = hpo_data.patient_info_df
             self.label_mapping = hpo_data.label_mapping 
-            self.relationship_mask = hpo_data.hpo_relationship_mask.to_numpy() if hpo_data.hpo_relationship_mask is not None else None    
+            relationship_mask = hpo_data.hpo_relationship_mask
+            if relationship_mask is not None:
+                if relationship_mask.shape != (self.n_features, self.n_features):
+                    raise ValueError("relationship_mask shape mismatch with HPO features")
+                self.relationship_mask = relationship_mask.to_numpy(copy=True)
+            else:
+                logger.warning("No relationship_mask provided. All feature pairs will be evaluated for synergy.")
+                self.relationship_mask = np.zeros((self.n_features, self.n_features))    
             
             self.min_individuals_for_correlation_test = min_individuals_for_correlation_test
             if self.min_individuals_for_correlation_test < 30:
@@ -97,7 +104,7 @@ class HPOStatisticsAnalyzer:
             observed_status_A: np.ndarray, 
             observed_status_B: np.ndarray,
             correlation_type: CorrelationType = CorrelationType.SPEARMAN,
-        ) -> Dict[str, Union[float, str]]:
+        ) -> Tuple[float, float]:
             """
             Calculate selected statistical metric (spearman, kendall, or phi) and its p-value
             for two binary (0/1) observed status vectors.
@@ -114,8 +121,8 @@ class HPOStatisticsAnalyzer:
                     - CorrelationType.PHI
 
             Returns:
-                Dict[str, Union[float, str]]: 
-                    A dictionary with the selected statistic and its p-value.
+                Tuple[float, float]: 
+                    A tuple containing the correlation coefficient and its p-value.
 
             Raises:
                 ValueError: If the provided correlation_name is not supported.
@@ -146,7 +153,7 @@ class HPOStatisticsAnalyzer:
             col_A: int,
             col_B: int, 
             correlation_type: CorrelationType = CorrelationType.SPEARMAN,
-        ) -> Dict[str, Union[float, str]]:
+        ) -> Tuple[int, int, float, float, dict]:
             """
             Perform correlation tests between two columns (HPO terms, diseases).
 
@@ -162,8 +169,8 @@ class HPOStatisticsAnalyzer:
                     - CorrelationType.PHI
 
             Returns:
-                Optional[Dict[str, Union[float, str]]]:
-                    Dictionary with correlation results, or None if invalid or insufficient data.
+                Tuple[int, int, float, float, dict]:
+                    A tuple containing the column indices, correlation coefficient, p-value, and contingency table counts.
 
             Raises:
                 ValueError: If insufficient data for correlation test or invalid columns (all 0 or 1).
@@ -204,7 +211,7 @@ class HPOStatisticsAnalyzer:
             self, 
             correlation_type: CorrelationType = CorrelationType.SPEARMAN, 
             n_jobs: int = -1,
-        ) -> pd.Data.Frame:
+        ) -> pd.DataFrame:
         """
         Compute pairwise correlation coefficients and p-values between HPO terms.
 
@@ -257,13 +264,10 @@ class HPOStatisticsAnalyzer:
         rows, cols, counts = valid_counts_sparse.row, valid_counts_sparse.col, valid_counts_sparse.data
 
         # Apply relationship mask if present
-        if self.relationship_mask is not None:
-            ontology_values = self.relationship_mask[rows, cols]
-            ontology_candidate = ~np.isnan(ontology_values)
-            candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_correlation_test))[0]
-        else:
-            candidate_idx = np.where(counts >= self.min_individuals_for_correlation_test)[0]
-
+        ontology_values = self.relationship_mask[rows, cols]
+        ontology_candidate = ~np.isnan(ontology_values)
+        candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_correlation_test))[0]
+   
         rows_cand, cols_cand = rows[candidate_idx], cols[candidate_idx]
         pairs = list(zip(rows_cand, cols_cand))
 
@@ -301,6 +305,13 @@ class HPOStatisticsAnalyzer:
                     "n_pmids": counts["n_pmid"]
                     })
 
+        valid_mask = ~(np.isnan(matrix).all(axis=0)) | (np.nan_to_num(matrix, nan=0).sum(axis=0) == 0)
+        if len(valid_mask) == 0:
+            logger.warning("Warning: No valid correlation between HPO terms. Correlation matrix will be empty.")
+        
+        filtered_columns = self.hpo_terms[valid_mask]
+        self.coef_df = pd.DataFrame(matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
+        self.pval_df = pd.DataFrame(pvalue_matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
    
         self.correlation_results = pd.DataFrame(rows)
         if not self.correlation_results.empty:
@@ -313,13 +324,6 @@ class HPOStatisticsAnalyzer:
                 pvals_corrected
             )
             self.correlation_results.sort_values(by="p_value", ascending=True, inplace=True)
-        valid_mask = ~(np.isnan(matrix).all(axis=0)) | (np.nan_to_num(matrix, nan=0).sum(axis=0) == 0)
-        if len(valid_mask) == 0:
-            logger.warning("Warning: No valid correlation between HPO terms. Correlation matrix will be empty.")
-        
-        filtered_columns = self.hpo_terms[valid_mask]
-        self.coef_df = pd.DataFrame(matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
-        self.pval_df = pd.DataFrame(pvalue_matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
 
         return self.correlation_results
     
@@ -456,7 +460,11 @@ class HPOStatisticsAnalyzer:
 
         return coef_matrix_cleaned, p_value_cleaned
     
-    def _format_hpo_pair(self, hpo_id: str, label: str | None) -> str:
+    def _format_hpo_pair(
+            self, 
+            hpo_id: str, 
+            label: str | None
+        ) -> str:
         """Format HPO for display."""
         if label:
             return f"{label} ({hpo_id})"

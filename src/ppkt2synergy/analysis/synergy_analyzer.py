@@ -68,18 +68,29 @@ class SynergyAnalyzer:
         if not isinstance(hpo_data, HpoFeatureMatrix):
             raise TypeError("hpo_data must be an instance of HpoFeatureMatrix.")
         
-        hpo_matrix = hpo_data.hpo_matrix.copy().to_numpy()
+        # --- Validate HPO matrix ---
+        hpo_matrix = hpo_data.hpo_matrix.to_numpy(copy=True)
         self.hpo_terms = hpo_data.hpo_matrix.columns
-        if not np.all(np.isin(hpo_matrix[~np.isnan(hpo_matrix)], [0, 1])):
+        valid_vals = hpo_matrix[~np.isnan(hpo_matrix)]
+        if not np.all((valid_vals == 0) | (valid_vals == 1)):
             raise ValueError("Non-NaN values in HPO Matrix must be either 0 or 1")
        
-        target = target.copy().to_numpy().ravel()
+        # --- Validate target ---
+        if isinstance(target, pd.DataFrame):
+            if target.shape[1] != 1:
+                raise ValueError("Target DataFrame must have exactly one column")
+            target = target.iloc[:, 0].to_numpy(copy=True)
+        elif isinstance(target, pd.Series):
+            target = target.to_numpy(copy=True)
+        else:
+            raise TypeError("target must be a pandas Series or single-column DataFrame")
         if len(target) != hpo_matrix.shape[0]:
             raise ValueError("The number of samples in Target must match the number of samples in HPO Matrix")
-        if not np.all(np.isin(target[~np.isnan(target)], [0, 1])):
+        valid_target = target[~np.isnan(target)]
+        if not np.all((valid_target == 0) | (valid_target == 1)):
             raise ValueError("Target must contain only 0, 1, or NaN")
 
-        self.X = hpo_matrix.copy()
+        self.X = hpo_matrix
         self.y = target.copy()
         self.patient_ids = hpo_data.hpo_matrix.index
         self.patient_pmids = hpo_data.patient_info_df
@@ -87,12 +98,16 @@ class SynergyAnalyzer:
         self.n_features = hpo_matrix.shape[1]
         self.n_permutations = n_permutations
         self.rng = np.random.default_rng(random_state)
-        
+
+        # Relationship mask (ontology-aware filtering)
         relationship_mask = hpo_data.hpo_relationship_mask
         if relationship_mask is not None:
-            self.synergy_matrix = relationship_mask.copy().to_numpy()
+            if relationship_mask.shape != (self.n_features, self.n_features):
+                raise ValueError("relationship_mask shape mismatch with HPO features")
+            self.relationship_mask = relationship_mask.to_numpy(copy=True)
         else:
-            self.synergy_matrix = np.full((self.n_features, self.n_features), np.nan)
+            logger.warning("No relationship_mask provided. All feature pairs will be evaluated for synergy.")
+            self.relationship_mask = np.zeros((self.n_features, self.n_features))
 
         self.min_individuals_for_synergy_calculation = min_individuals_for_synergy_calculation
         if self.min_individuals_for_synergy_calculation < 30:
@@ -134,7 +149,7 @@ class SynergyAnalyzer:
             self, 
             i:int,
             j:int
-        ) -> Tuple[int, int, float, float]: 
+        ) -> Tuple[int, int, float, float, dict]: 
         """
         Compute synergy and permutation-based p-value for feature pair (i, j).
 
@@ -150,11 +165,12 @@ class SynergyAnalyzer:
             Index of the second feature.
 
         Returns:
-            Tuple[int, int, float, float]:
+            Tuple[int, int, float, float, dict]:
                 - i (int): Index of the first feature.
                 - j (int): Index of the second feature.
                 - corrected_synergy (float): Corrected synergy score.
                 - p_value (float): Empirical p-value from permutation test.
+                - counts (dict): Contingency table counts.
         """
         mask = (~np.isnan(self.X[:, i]) & ~np.isnan(self.X[:, j]) & ~np.isnan(self.y))
         xi = self.X[mask, i]
@@ -269,9 +285,7 @@ class SynergyAnalyzer:
         rows, cols, counts = valid_counts_sparse.row, valid_counts_sparse.col, valid_counts_sparse.data
 
         # --- Step 2: Apply relationship mask ---
-        if self.synergy_matrix is None:
-            self.synergy_matrix = np.full((self.n_features, self.n_features), np.nan)
-        ontology_values = self.synergy_matrix[rows, cols]
+        ontology_values = self.relationship_mask[rows, cols]
         ontology_candidate = ~np.isnan(ontology_values)
 
         # --- Step 3: Filter pairs ---
@@ -287,12 +301,12 @@ class SynergyAnalyzer:
         results = Parallel(n_jobs=n_jobs)(
             delayed(self.evaluate_pair_synergy)(i, j) for i, j in tqdm(pairs, desc="Calculating pairwise synergy")
         )
-    
+        synergy_matrix = np.full((self.n_features, self.n_features), np.nan)
         pvalue_matrix = np.full((self.n_features, self.n_features), np.nan)
 
         rows = []
         for i, j, synergy, pval, counts in results:
-            self.synergy_matrix[i, j] = self.synergy_matrix[j, i] = synergy
+            synergy_matrix[i, j] = synergy_matrix[j, i] = synergy
             pvalue_matrix[i, j] = pvalue_matrix[j, i] = pval
             f1, f2 = self.hpo_terms[i], self.hpo_terms[j]
             if j > i:  # only upper triangle
@@ -318,13 +332,13 @@ class SynergyAnalyzer:
                         "n_pmids": counts["n_pmid"]
                     })
 
-        valid_mask = ~((np.isnan(self.synergy_matrix).all(axis=0)) | (np.nan_to_num(self.synergy_matrix, nan=0).sum(axis=0) == 0))
+        valid_mask = ~((np.isnan(synergy_matrix).all(axis=0)) | (np.nan_to_num(synergy_matrix, nan=0).sum(axis=0) == 0))
         valid_hpo_terms = self.hpo_terms[valid_mask]
         if len(valid_hpo_terms) == 0:
             logger.warning("Warning: No valid synergy between HPO terms. Synergy matrix will be empty.")
 
         self.synergy_matrix = pd.DataFrame(
-            self.synergy_matrix[np.ix_(valid_mask, valid_mask)],
+            synergy_matrix[np.ix_(valid_mask, valid_mask)],
             index=valid_hpo_terms,
             columns=valid_hpo_terms
         )
