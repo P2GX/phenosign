@@ -1,12 +1,16 @@
+from ._utils import HPOTermManager, HPOHierarchyEngine
+from .matrix_builder import PhenopacketMatrixBuilder
+from .dataset_assembler import PhenopacketDatasetAssembler
+from .matrices import HpoFeatureMatrix, TargetMatrix
 
-from .phenopacket_matrix_generator import PhenopacketMatrixGenerator
-from .phenopacket_matrix_processor import PhenopacketMatrixProcessor
-from ._utils import HPOHierarchyUtils
 
 
 
 __all__ = [
-    "PhenopacketMatrixGenerator",
-    "PhenopacketMatrixProcessor",
-    "HPOHierarchyUtils"
+    "HPOTermManager",
+    "HPOHierarchyEngine",
+    "PhenopacketMatrixBuilder",
+    "PhenopacketDatasetAssembler",
+    'HpoFeatureMatrix',
+    'TargetMatrix'
 ]

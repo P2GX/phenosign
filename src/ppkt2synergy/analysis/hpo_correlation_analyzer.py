@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
-from typing import Dict, Union, Tuple,Optional
+from typing import Dict, Union, Tuple
 from joblib import Parallel, delayed
 import scipy.stats
+from ..preprocessing import HpoFeatureMatrix
 from .correlation_type import CorrelationType
 import plotly.graph_objs as go
 import logging
@@ -11,7 +12,6 @@ from tqdm import tqdm
 from statsmodels.stats.multitest import multipletests
 from scipy.sparse import coo_matrix, triu
 from itertools import chain
-
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +26,10 @@ class HPOStatisticsAnalyzer:
     It supports filtering weak correlations and highlighting statistically significant relationships in a heatmap.
 
     Example:
-        from ppkt2synergy import CohortDataLoader, HPOStatisticsAnalyzer
-        >>> phenopackets = CohortDataLoader.from_ppkt_store('FBN1')
-        >>> hpo_matrix, target_matrix = PhenopacketMatrixProcessor.prepare_hpo_data(
-                phenopackets, threshold=0.5, mode='leaf', use_label=True)
+        from ppkt2synergy import load_phenopackets, PhenopacketAssembler, HPOStatisticsAnalyzer
+        >>> phenopackets = load_phenopackets('FBN1')
+        >>> assembler = PhenopacketAssembler(phenopackets)
+        >>> hpo_matrix, target_matrix = assembler.build()
         >>> analyzer =HPOStatisticsAnalyzer(hpo_matrix, min_individuals_for_correlation_test=40)
         >>> coef_matrix, pval_matrix = analyzer.compute_correlation_matrices("Spearman")
         >>> analyzer.plot_correlation_heatmap_with_significance("Spearman")
@@ -40,7 +40,7 @@ class HPOStatisticsAnalyzer:
     """
     def __init__(
             self,  
-            hpo_data: Tuple[pd.DataFrame,pd.DataFrame,Optional[pd.DataFrame]], 
+            hpo_data: HpoFeatureMatrix, 
             min_individuals_for_correlation_test: int = 30,
             min_cooccurrence_count = 1
         ):
@@ -48,62 +48,51 @@ class HPOStatisticsAnalyzer:
             Initialize the HPOStatisticsAnalyzer.
 
             Args:
-            hpo_data(Tuple[pd.DataFrame,Optional[pd.DataFrame]]):
-            - Feature matrix of shape (n_samples, n_features): 
-                Non-NaN values must be 0 or 1. DataFrame inputs will be converted to a NumPy array.
-            - relationship_mask (n_features, n_features):
-                Optional 2D array (n_features x n_features) indicating valid feature pairs to evaluate.
-                Can be used to skip predefined pairs (e.g. based on HPO hierarchy or previous results).
-                If provided, it will be converted to a NumPy array and used to initialize the synergy matrix.
+            hpo_data (HpoFeatureMatrix):):
+                A dataclass containing the HPO term matrix, label mapping, patient metadata, and optional relationship mask.
             min_individuals_for_correlation_test(int): (default: 30)
                 Minimum number of valid individuals required to perform correlation tests.
-            min_cooccurrence_count (int, default=1):
-                Minimum number of co-occurrences (both features present, 1/1) 
-                **and** co-exclusions (both features absent, 0/0) required 
-                for a feature pair to be considered valid for correlation testing.
-                This ensures that both positive and negative concordance are observed 
-                more than once, avoiding spurious correlations.
+            min_coccurrence_count : int, default=1
+                Threshold for filtering feature pairs based on co-occurrence data. 
+                A feature pair will be considered invalid for correlation testing 
+                if the number of co-exclusions (both features absent, 0/0) is less 
+                than this threshold, and the function will return NaN for correlation. 
+
+                Notes
+                -----
+                - The input data is a binary (0/1) matrix of HPO features.
+                - Many HPO terms are mutually exclusive and may never co-occur 
+                (1/1 = 0), so co-occurrence is not required.
+                - The threshold ensures that negative concordance (co-exclusion) 
+                is observed sufficiently, avoiding spurious correlations due 
+                to lack of negative evidence.
+                - Positive concordance (co-occurrence, 1/1) is optional and not 
+                used for filtering.
+
 
             Raises:
                 ValueError: If min_individuals_for_correlation_test is less than 30.
             """
-            if isinstance(hpo_data, tuple):
-                hpo_matrix, relationship_mask, pmids_matrix = hpo_data
-            else:
-                raise TypeError("hpo_data must be a tuple of (hpo_matrix, relationship_mask)")
-            if isinstance(hpo_matrix, pd.DataFrame):
-                self.hpo_matrix = hpo_matrix
-                self.hpo_terms = hpo_matrix.columns
-                self.n_features = hpo_matrix.shape[1]
-            else:
-                raise TypeError("hpo_matrix must be a pandas DataFrame")
-            
-            if isinstance(pmids_matrix, pd.DataFrame):
-                self.patient_pmids = pmids_matrix
-            
-            if not np.all(np.isin(hpo_matrix.to_numpy()[~np.isnan(hpo_matrix.to_numpy())], [0, 1])):
-                raise ValueError("Non-NaN values in HPO Matrix must be either 0 or 1")
-            
-            self.relationship_mask = None
-            if relationship_mask is not None:
-                if isinstance(relationship_mask, pd.DataFrame):
-                    self.relationship_mask = relationship_mask.to_numpy() 
-                else:
-                    raise ValueError("relationship_mask must be a pd.DataFrame")
-                    
-                if relationship_mask.shape[0] != relationship_mask.shape[1] or \
-                    relationship_mask.shape[0] != hpo_matrix.shape[1]:
-                    raise ValueError("relationship_mask must have the same number of rows and columns as hpo_matrix has features")
+            if not isinstance(hpo_data, HpoFeatureMatrix):
+                raise TypeError("hpo_data must be a HpoFeatureMatrix instance")
                 
-                if not np.all(np.isin(self.relationship_mask[~np.isnan(self.relationship_mask)], [0])):
-                    raise ValueError("relationship_mask must contain only 0 or NaN")
+            self.hpo_matrix = hpo_data.hpo_matrix
+            self.hpo_terms = self.hpo_matrix.columns
+            self.n_features = self.hpo_matrix.shape[1]
+            self.patient_pmids = hpo_data.patient_info_df
+            self.label_mapping = hpo_data.label_mapping 
+            self.relationship_mask = hpo_data.hpo_relationship_mask.to_numpy() if hpo_data.hpo_relationship_mask is not None else None    
             
-            #if min_individuals_for_correlation_test < 30:
-            #    raise ValueError("min_individuals_for_correlation_test must not be less than 30.")
             self.min_individuals_for_correlation_test = min_individuals_for_correlation_test
+            if self.min_individuals_for_correlation_test < 30:
+                logger.warning(
+                    f"min_individuals_for_correlation_test is set to {self.min_individuals_for_correlation_test}, "
+                    f"which is below the recommended threshold of 30. "
+                    f"This may lead to unstable or less reliable correlation estimates."
+                )
             self.min_coccurrence_count = min_cooccurrence_count
 
-    def _calculate_pairwise_stats( 
+    def _calculate_stats( 
             self,
             observed_status_A: np.ndarray, 
             observed_status_B: np.ndarray,
@@ -195,20 +184,20 @@ class HPOStatisticsAnalyzer:
                 return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
             
             # --- Count co-occurrence ---
-            observed_observed = np.sum((col_A_values == 1) & (col_B_values == 1))
             excluded_excluded = np.sum((col_A_values == 0) & (col_B_values == 0))
 
-            if observed_observed <= self.min_coccurrence_count or excluded_excluded <= self.min_coccurrence_count:
+            if excluded_excluded <= self.min_coccurrence_count:
                 return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
 
             try:
-                coef, p_val = self._calculate_pairwise_stats(col_A_values, col_B_values, correlation_type=correlation_type)
+                coef, p_val = self._calculate_stats(col_A_values, col_B_values, correlation_type=correlation_type)
                 patient_ids = self.hpo_matrix.index[mask]
                 pmids_list = self.patient_pmids.loc[patient_ids, 'pmids'].to_numpy()
                 all_pmids = set(chain.from_iterable(pmids_list))
                 n_pmids = len(all_pmids)
                 return (col_A, col_B, coef, p_val, {"00":count_00,"01":count_01,"10":count_10,"11":count_11,"N":total,"n_pmid": n_pmids})
             except Exception as e:
+                logger.error(f"Error calculating correlation for columns {col_A} and {col_B}: {e}")
                 return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
 
     def compute_correlation_matrix(
@@ -293,21 +282,25 @@ class HPOStatisticsAnalyzer:
             matrix[j, i] = coef
             pvalue_matrix[i, j] = pval
             pvalue_matrix[j, i] = pval
+
             hpo1, hpo2 = columns[i], columns[j]
             if j > i:  # only upper triangle
                 if not np.isnan(coef):
                     rows.append({
-                        "HPO_A": hpo1,
-                        "HPO_B": hpo2,
-                        "correlation": coef,
-                        "p_value": pval,
-                        "Count_00": counts["00"],
-                        "Count_01": counts["01"],
-                        "Count_10": counts["10"],
-                        "Count_11": counts["11"],
-                        "n_patients": counts["N"],
-                        "n_pmids": counts["n_pmid"]
-                    }) 
+                    "HPO_A": hpo1,
+                    **({"HPO_A_label": self.label_mapping.get(hpo1)} if self.label_mapping.get(hpo1) else {}),
+                    "HPO_B": hpo2,
+                    **({"HPO_B_label": self.label_mapping.get(hpo2)} if self.label_mapping.get(hpo2) else {}),
+                    "correlation": coef,
+                    "p_value": pval,
+                    "Count_00": counts["00"],
+                    "Count_01": counts["01"],
+                    "Count_10": counts["10"],
+                    "Count_11": counts["11"],
+                    "n_patients": counts["N"],
+                    "n_pmids": counts["n_pmid"]
+                    })
+
    
         self.correlation_results = pd.DataFrame(rows)
         if not self.correlation_results.empty:
@@ -331,9 +324,9 @@ class HPOStatisticsAnalyzer:
     
     def save_correlation_results(
             self, 
-            lower_bound: float=-0.0, 
-            upper_bound: float=0.0,
-            alpha: float = 0.0,
+            abs_threshold: float = 0.0,
+            alpha: float = 1.0,
+            corrected_alpha: float = 1.0,
             output_file: str="correlation_results.csv"
         ) -> None:
         """
@@ -343,12 +336,16 @@ class HPOStatisticsAnalyzer:
         been computed previously by calling `compute_correlation_matrix`.
 
         Args:
-            lower_bound (float):
-                Minimum correlation value to include. 
-            upper_bound (float):
-                Maximum correlation value to include. 
-            alpha (float):
-                Significance threshold for p-values. Only correlations with p < alpha are kept.
+            abs_threshold (float): (default: 0.0)
+                Minimum absolute correlation coefficient to retain. Correlations with 
+                |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0. 
+            alpha (float): (default: 1.0)
+                Significance threshold for uncorrected p-values. Correlations with 
+                p-value >= alpha will be filtered out. Range: 0.0 <= alpha <= 1.0.
+            corrected_alpha (float): (default: 1.0)
+                Significance threshold for multiple-testing corrected p-values. Correlations 
+                with corrected p-value >= corrected_alpha will be filtered out. Range: 
+                0.0 <= corrected_alpha <= 1.0.
             output_file (str):
                 Path to the output file. Supported formats:
                 - ".csv": saves as a CSV file.
@@ -364,17 +361,24 @@ class HPOStatisticsAnalyzer:
             >>> analyzer.save_correlation_results("correlations.csv")
             >>> analyzer.save_correlation_results("correlations.xlsx")
         """
-        
         if not hasattr(self, "correlation_results"):
             raise ValueError("Correlation results not computed. Run compute_correlation_matrix() first.")
         
         df = self.correlation_results.copy()
+        if df.empty:
+            logger.warning("Warning: Correlation results are empty. No file will be saved.")
+            return
 
-        if alpha > 0.0 and "p_value" in df.columns:
-            df = df[df["p_value"] < alpha]
+        if abs_threshold < 0.0 or abs_threshold > 1.0:
+            raise ValueError("abs_threshold must be between 0.0 and 1.0")
+        df = df[df["correlation"].abs() >= abs_threshold]
 
-        if lower_bound < 0.0 and upper_bound >0.0:
-            df = df[(df["correlation"] <= lower_bound) | (df["correlation"] >= upper_bound)]
+        if alpha < 0.0 or alpha > 1.0:
+            raise ValueError("alpha must be between 0.0 and 1.0")
+        if corrected_alpha < 0.0 or corrected_alpha > 1.0:
+            raise ValueError("corrected_alpha must be between 0.0 and 1.0")
+
+        df = df[(df["p_value"] < alpha) & (df["p_value_corrected"] < corrected_alpha)]
 
         ext = path.splitext(output_file)[1].lower()
         if ext not in [".csv", ".xlsx"]:
@@ -388,21 +392,24 @@ class HPOStatisticsAnalyzer:
     
     def filter_weak_correlations(
             self, 
-            lower_bound: float=-0.55, 
-            upper_bound: float=0.55,
+            abs_threshold: float = 0.55,
             alpha: float = 0.05,
+            corrected_alpha: float = 0.1
         ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Remove weak correlations from the correlation matrix based on the given threshold.
 
         Args:
-            stats_name(str): (default: "spearman") 
-                The name of the statistic to calculate (e.g., "spearman", "kendall", "phi").
-            lower_bound(float): (default: -0.55)
-                The lower bound for filtering weak correlations.
-            upper_bound(float): (default: 0.55)
-                The upper bound for filtering weak correlations.
-            alpha: float = 0.05,
+            abs_threshold (float): (default: 0.55)
+                Minimum absolute correlation coefficient to retain. Correlations with 
+                |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0. 
+            alpha (float): (default: 0.05)
+                Significance threshold for uncorrected p-values. Correlations with 
+                p-value >= alpha are set to NaN. Must satisfy 0.0 <= alpha <= 1.0. 
+            corrected_alpha (float): (default: 0.1)
+                Significance threshold for multiple-testing corrected p-values. Correlations 
+                with corrected p-value >= corrected_alpha are set to NaN. Range: 0.0 <= 
+                corrected_alpha <= 1.0.
 
         Returns:
             Tuple[pd.DataFrame, pd.DataFrame]:
@@ -411,15 +418,27 @@ class HPOStatisticsAnalyzer:
         """
         if not hasattr(self, 'coef_df') or not hasattr(self, 'pval_df'):
             raise RuntimeError("Correlation matrix not found. Please run `compute_correlation_matrix()` first.")
+        
+        if self.correlation_results.empty:
+            logger.warning("Warning: Correlation results are empty. No correlations to filter.")
+            return
 
         coef_matrix,p_value = self.coef_df.copy(), self.pval_df.copy()
-
-        mask = (coef_matrix > lower_bound) & (coef_matrix < upper_bound)
+        if abs_threshold < 0.0 or abs_threshold > 1.0:
+            raise ValueError("abs_threshold must be between 0.0 and 1.0")
+        mask = coef_matrix.abs() < abs_threshold
         coef_matrix[mask] = np.nan
         p_value[mask] = np.nan
 
+        if alpha < 0.0 or alpha > 1.0:
+            raise ValueError("alpha must be between 0.0 and 1.0")
+        if corrected_alpha < 0.0 or corrected_alpha > 1.0:
+            raise ValueError("corrected_alpha must be between 0.0 and 1.0")
+        
         non_signif = self.correlation_results.loc[
-            self.correlation_results["p_value_corrected"] >= alpha, ["HPO_A", "HPO_B"]
+            (self.correlation_results["p_value"] >= alpha) &
+            (self.correlation_results["p_value_corrected"] >= corrected_alpha),
+            ["HPO_A", "HPO_B"]
         ]
         for _, row in non_signif.iterrows():
             hpo1, hpo2 = row["HPO_A"], row["HPO_B"]
@@ -436,13 +455,18 @@ class HPOStatisticsAnalyzer:
 
         return coef_matrix_cleaned, p_value_cleaned
     
+    def _format_hpo_pair(self, hpo_id: str, label: str | None) -> str:
+        """Format HPO for display."""
+        if label:
+            return f"{label} ({hpo_id})"
+        return hpo_id
 
     def plot_correlation_heatmap_with_significance(
             self,
             stats_name: str = "spearman",
-            lower_bound: float = -0.55,
-            upper_bound: float = 0.55,
+            abs_threshold: float = 0.55,
             alpha: float = 0.05,
+            corrected_alpha: float = 0.1,
             title_name: str = "",
         ) -> go.Figure:
         """
@@ -450,15 +474,19 @@ class HPOStatisticsAnalyzer:
         with hover information for p-values.
 
         Parameters:
-            stats_name (str): 
+            stats_name (str): (default: "spearman")
                 Type of correlation coefficient to use ("spearman", "kendall", "phi").
-            lower_bound (float): 
-                Lower threshold to filter out weak correlations.
-            upper_bound (float): 
-                Upper threshold to filter out weak correlations.
+            abs_threshold (float): (default: 0.55)
+                Minimum absolute correlation coefficient to retain. Correlations with 
+                |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0. 
             alpha (float): (default: 0.05)
-                Significance threshold for P-value.
-            title_name (str): 
+                Significance threshold for uncorrected p-values. Correlations with 
+                p-value >= alpha are set to NaN. Must satisfy 0.0 <= alpha <= 1.0.
+            corrected_alpha (float): (default: 0.1)
+                Significance threshold for multiple-testing corrected p-values. Correlations 
+                with corrected p-value >= corrected_alpha are set to NaN. Range: 0.0 <= 
+                corrected_alpha <= 1.0.
+            title_name (str, optional): 
                 Optional subtitle to display under the main title.
 
         Returns:
@@ -471,8 +499,9 @@ class HPOStatisticsAnalyzer:
             >>> # Generate heatmap (returns a Plotly Figure)
             >>> fig = analyzer.plot_correlation_heatmap_with_significance(
             ...     stats_name="spearman",
-            ...     lower_bound=-0.5,
-            ...     upper_bound=0.5,
+            ...     abs_threshold=0.55,
+            ...     alpha=0.05, 
+            ...     corrected_alpha=0.1,
             ...     title_name="Cohort A"
             ... )
             >>> # Show in Jupyter or browser
@@ -480,14 +509,13 @@ class HPOStatisticsAnalyzer:
         """
         # --- Compute correlation and filter weak correlations ---
         coef_matrix, pval_matrix = self.filter_weak_correlations(
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
+            abs_threshold=abs_threshold,
             alpha=alpha,
+            corrected_alpha=corrected_alpha
         )
 
         if coef_matrix.empty or np.isnan(coef_matrix.values).all():
-            raise ValueError("Coefficient matrix is empty. Try adjusting the lower_bound parameter.")
-
+            raise ValueError("Coefficient matrix is empty. Try adjusting the abs_threshold parameter.")
         # --- Dynamic layout scaling based on matrix size ---
         n_rows, n_cols = coef_matrix.shape
         cell_size = 60  # Base pixel size per cell
@@ -546,9 +574,11 @@ class HPOStatisticsAnalyzer:
                 if np.isnan(coef):
                     hover_row.append("")
                 else:
+                    display_row = self._format_hpo_pair(row, self.label_mapping.get(row))
+                    display_col = self._format_hpo_pair(col, self.label_mapping.get(col))
                     counts = counts_lookup.get((row, col), {})
                     hover_row.append(
-                        f"<b>HPO_A</b>: {col}<br><b>HPO_B</b>: {row}<br>"
+                        f"<b>HPO_A</b>: {display_col}<br><b>HPO_B</b>: {display_row}<br>"
                         f"<b>Corr</b>: {coef:.2f}<br><b>p-val</b>: {pval:.6f}<br>"
                         f"<b>p-val_corrected</b>: {counts.get('P_value_corrected', np.nan):.6f}<br>"
                         f"<b>Counts_ab</b>: {counts.get('Count_00', 0)}, "
@@ -560,7 +590,8 @@ class HPOStatisticsAnalyzer:
                     )
             hover_text.append(hover_row)
           
-
+        coef_matrix.rename(index=self.label_mapping, columns=self.label_mapping, inplace=True)
+        
         # --- Create heatmap figure ---
         fig = go.Figure(
             go.Heatmap(

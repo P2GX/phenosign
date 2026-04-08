@@ -1,7 +1,8 @@
-from .io import CohortDataLoader, load_hpo
-from .preprocessing import PhenopacketMatrixGenerator
-from .preprocessing import PhenopacketMatrixProcessor,HPOHierarchyUtils
-from .analysis import HPOStatisticsAnalyzer, PairwiseSynergyAnalyzer,CorrelationType
+from .io import load_phenopackets, EnrichedPhenopacket, load_hpo
+from .preprocessing import HPOHierarchyEngine
+from .preprocessing import PhenopacketMatrixBuilder
+from .preprocessing import PhenopacketDatasetAssembler
+from .analysis import HPOStatisticsAnalyzer, SynergyAnalyzer,CorrelationType
 from .synergy_tree import SynergyTreeBuilder
 from .synergy_tree import SynergyTreeVisualizer, SynergyTreeVisualizerconnected
 from .synergy_tree import MutualInformationCalculator
@@ -14,12 +15,13 @@ __version__ = "0.0.7"
 
 __all__ = [
     "load_hpo",
-    "CohortDataLoader",
-    "PhenopacketMatrixGenerator",
-    "PhenopacketMatrixProcessor",
-    "HPOHierarchyUtils",
+    "load_phenopackets",
+    "EnrichedPhenopacket",
+    "HPOHierarchyEngine",
+    "PhenopacketMatrixBuilder",
+    "PhenopacketDatasetAssembler",
     "HPOStatisticsAnalyzer",
-    "PairwiseSynergyAnalyzer",
+    "SynergyAnalyzer",
     "CorrelationType",
     "SynergyTreeBuilder",
     "SynergyTreeVisualizer",

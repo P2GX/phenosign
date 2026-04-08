@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from ppkt2synergy import HPOHierarchyUtils
+from ppkt2synergy import HPOHierarchyEngine
 import pathlib
 
 TEST_DIR = pathlib.Path(__file__).parent.parent.resolve()
@@ -15,10 +15,10 @@ def toy_terms():
     return {"HP:0001250", "HP:0020219", "HP:0012759"}
 
 @pytest.fixture
-def hpo_utils():
-    return HPOHierarchyUtils(hpo_file=str(HP_JSON_FILE))  
+def hpo_engine():
+    return HPOHierarchyEngine(hpo_file=str(HP_JSON_FILE))  
 
-def test_propagate_hierarchy(hpo_utils):
+def test_propagate_hierarchy(hpo_engine):
     # Simulate a toy matrix before propagation
     data = {
         "HP:0020219": [1, 1, np.nan],
@@ -27,7 +27,7 @@ def test_propagate_hierarchy(hpo_utils):
     }
     df = pd.DataFrame(data, index=["Patient_1", "Patient_2", "Patient_3"])
 
-    propagated = hpo_utils.propagate_hpo_hierarchy(df)
+    propagated = hpo_engine.propagate_hpo_hierarchy(df)
 
     # After propagation
     # Patient 1: full positive path
@@ -45,19 +45,10 @@ def test_propagate_hierarchy(hpo_utils):
     assert propagated.loc["Patient_3", "HP:0001250"] == 0
     assert propagated.loc["Patient_3", "HP:0012759"] == 1
 
-def test_classify_terms(hpo_utils, toy_terms):
-    result = hpo_utils.classify_terms(toy_terms)
-    assert isinstance(result, dict)
-    for root, info in result.items():
-        assert "terms" in info
-        assert "leaves" in info
-        assert set(info["terms"]).issubset(toy_terms)
-        assert set(info["leaves"]).issubset(info["terms"])
-
-def test_build_relationship_mask(hpo_utils, toy_terms):
+def test_build_relationship_mask(hpo_engine, toy_terms):
     terms = list(toy_terms)
-    mask = hpo_utils.build_relationship_mask(terms)
-
+    hpo_engine.tm.prepare_terms(set(terms))
+    mask = hpo_engine.build_relationship_mask(terms)
     assert isinstance(mask, pd.DataFrame)
     assert mask.shape == (len(terms), len(terms))
 
@@ -70,5 +61,5 @@ def test_build_relationship_mask(hpo_utils, toy_terms):
     assert np.isnan(mask.loc["HP:0020219", "HP:0001250"])
 
     # Make sure unrelated terms have numeric value
-    assert mask.loc["HP:0001250", "HP:0012759"] != np.nan
+    assert mask.loc["HP:0001250", "HP:0012759"] == 0
 
