@@ -220,7 +220,7 @@ class SynergyAnalyzer:
     def compute_synergy_matrix(
             self, 
             n_jobs=-1,
-        ) -> None:
+        ) -> pd.DataFrame:
         """
         Compute the pairwise synergy scores and permutation-based p-values for all valid feature pairs.
 
@@ -338,11 +338,14 @@ class SynergyAnalyzer:
         if not self.synergy_results.empty:
             pvals = self.synergy_results["p_value"].values
             _, pvals_corrected, _, _ = multipletests(pvals, method="fdr_bh")
+            loc = int(self.synergy_results.columns.get_loc("p_value"))
             self.synergy_results.insert(
-                self.synergy_results.columns.get_loc("p_value") + 1, 
-                "p_value_corrected",                                       
+                loc + 1,
+                "p_value_corrected",
                 pvals_corrected
             )
+            self.synergy_results.sort_values(by="p_value", ascending=True, inplace=True)
+        
         return self.synergy_results
     
 

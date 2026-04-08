@@ -204,7 +204,7 @@ class HPOStatisticsAnalyzer:
             self, 
             correlation_type: CorrelationType = CorrelationType.SPEARMAN, 
             n_jobs: int = -1,
-        ) -> None:
+        ) -> pd.Data.Frame:
         """
         Compute pairwise correlation coefficients and p-values between HPO terms.
 
@@ -306,12 +306,13 @@ class HPOStatisticsAnalyzer:
         if not self.correlation_results.empty:
             pvals = self.correlation_results["p_value"].values
             _, pvals_corrected, _, _ = multipletests(pvals, method="fdr_bh")
+            loc = int(self.correlation_results.columns.get_loc("p_value"))
             self.correlation_results.insert(
-                self.correlation_results.columns.get_loc("p_value") + 1, 
-                "p_value_corrected",                                       
+                loc + 1,
+                "p_value_corrected",
                 pvals_corrected
             )
-        
+            self.correlation_results.sort_values(by="p_value", ascending=True, inplace=True)
         valid_mask = ~(np.isnan(matrix).all(axis=0)) | (np.nan_to_num(matrix, nan=0).sum(axis=0) == 0)
         if len(valid_mask) == 0:
             logger.warning("Warning: No valid correlation between HPO terms. Correlation matrix will be empty.")
