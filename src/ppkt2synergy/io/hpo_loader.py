@@ -1,12 +1,13 @@
 import hpotk
 from typing import IO
 import logging
+
 logger = logging.getLogger(__name__)
 
 def load_hpo(
-        file: IO | str | None = None,
-        release: str | None = None
-    ) -> hpotk.MinimalOntology:
+    file: IO | str | None = None,
+    release: str | None = None
+) -> hpotk.MinimalOntology:
     """
     Loads the HPO ontology from a localfile or a specified release, with fallback.
 

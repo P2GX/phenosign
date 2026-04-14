@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from ppkt2synergy.analysis.hpo_correlation_analyzer import HPOStatisticsAnalyzer
 from ppkt2synergy.analysis.correlation_type import CorrelationType
-from ppkt2synergy.preprocessing import HpoFeatureMatrix
+from ppkt2synergy.preprocessing import HpoFeatureData
 
 @pytest.fixture
 def large_hpo_data():
@@ -17,7 +17,7 @@ def large_hpo_data():
 
     pmids_df = pd.DataFrame({"pmids":[["PMID:1"]] * n_samples}, index=hpo_matrix.index)
     label_mapping = {col: col for col in hpo_matrix.columns}
-    hpo_data = HpoFeatureMatrix(
+    hpo_data = HpoFeatureData(
         hpo_matrix=hpo_matrix,
         patient_info_df=pmids_df,
         label_mapping=label_mapping,

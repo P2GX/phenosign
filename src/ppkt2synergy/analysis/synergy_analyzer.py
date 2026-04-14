@@ -2,8 +2,7 @@ from sklearn.metrics import mutual_info_score
 from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
-from typing import Tuple, Union
-from ..preprocessing import HpoFeatureMatrix
+from ..core import PhenotypeDataset
 import plotly.graph_objs as go
 import logging
 import os
@@ -16,91 +15,135 @@ logger = logging.getLogger(__name__)
 
 class SynergyAnalyzer:
     """
-    Analyzes the pairwise synergy between features using mutual information and permutation testing.
-    
-    Example:
-        from ppkt2synergy import load_phenopackets, PhenopacketAssembler,,SynergyAnalyzer
-        >>> phenopackets = load_phenopackets("FBN1")
-        >>> assembler = PhenopacketAssembler(phenopackets)
-        >>> hpo_matrix, target_matrix = assembler.build()
-        >>> target = target_matrix.disease_matrix["Some_Disease"]  
+    Analyze pairwise synergy between HPO features with respect to a selected target.
 
-        >>> analyzer = SynergyAnalyzer(hpo_matrix, target, n_permutations=100)
-        >>> synergy, pvalues = analyzer.compute_pairwise_synergy_matrix()
-        >>> analyzer.plot_synergy_heatmap(significance_threshold=0.05)
+    This class computes pairwise feature synergy using mutual information and
+    permutation testing. The target can be either:
+
+    1. a pre-built target stored in `dataset.targets`
+       - e.g. "disease", "variant_condition"
+
+    2. a metadata-derived binary target generated on the fly
+       - e.g. "sex", "cohort"
+
+    Examples:
+    >>> phenopackets = load_phenopackets("FBN1")
+    >>> dataset = PhenotypeDatasetBuilder(phenopackets).build(missing_threshold=0.9)
+
+    >>> analyzer = SynergyAnalyzer(
+    ...     dataset=dataset,
+    ...     target_type="disease",
+    ...     target_name="Loeys-Dietz syndrome",
+    ...     n_permutations=100,
+    ... )
+    >>> analyzer.compute_synergy_matrix()
+
+    >>> analyzer = SynergyAnalyzer(
+    ...     dataset=dataset,
+    ...     target_type="sex",
+    ...     positive_class="MALE",
+    ... )
+    >>> analyzer.compute_synergy_matrix()
     """
     def __init__(
-            self, 
-            hpo_data: HpoFeatureMatrix, 
-            target: Union[pd.Series, pd.DataFrame],
-            n_permutations: int = 100,
-            min_individuals_for_synergy_calculation: int = 40, 
-            random_state: int = 42,
-        ):
+        self, 
+        dataset: PhenotypeDataset, 
+        target_type: str,
+        target_name: str | None = None,
+        positive_class=None,
+        n_permutations: int = 100,
+        min_individuals_for_synergy_calculation: int = 40, 
+        random_state: int = 42,
+    ):
         """
         Initialize the analyzer with feature data and target variable.
 
         Agrs:
-        hpo_data(HpoFeatureMatrix):
-            - Feature matrix of shape (n_samples, n_features): 
-                Non-NaN values must be 0 or 1. DataFrame inputs will be converted to a NumPy array.
-            - relationship_mask (n_features, n_features):
-                Optional 2D dataframe (n_features x n_features) indicating valid feature pairs to evaluate.
-                Can be used to skip predefined pairs (e.g. based on HPO hierarchy or previous results).
-                If provided, it will be converted to a NumPy array and used to initialize the synergy matrix.
-        target(Union[pd.Series, pd.DataFrame]):
-            Target vector of shape (n_samples,). Series/DataFrame inputs will be converted to a 1D NumPy array.
-        n_permutations(int): (default: 100)
-            Number of permutations for calculating p-values.
-        min_individuals_for_synergy_caculation(int): (default: 40)
-            Minimum number of samples required to calculate synergy.
-        random_state(int): (default: 42)
-            Seed for reproducible results.
+            dataset : PhenotypeDataset
+                Analysis-ready dataset containing:
+                - HPO feature data
+                - target matrices
+                - sample metadata
+
+            target_type : str
+                Type of target to analyze against. Supported values include:
+                - "disease"
+                - "variant_condition"
+                - metadata column names such as "sex" or "cohort"
+
+            target_name : str | None, optional
+                Column name for pre-built target matrices.
+                Required when `target_type` is:
+                - "disease"
+                - "variant_condition"
+
+            positive_class : optional
+                Required when `target_type` refers to a metadata column.
+                A binary target will be constructed as:
+                - 1 where sample_metadata[target_type] == positive_class
+                - 0 otherwise
+            n_permutations(int): (default: 100)
+                Number of permutations for calculating p-values.
+            min_individuals_for_synergy_caculation(int): (default: 40)
+                Minimum number of samples required to calculate synergy.
+            random_state(int): (default: 42)
+                Seed for reproducible results.
 
         Raises:
-        ValueError:
-            - If hpo_matrix is not a 2D array.
-            - If target's length does not match hpo_matrix's row count.
-            - If hpo_matrix contains values other than 0, 1, or NaN.
-            - If mask has an incompatible shape.
-            - If min_individuals_for_synergy_calculation is less than 40.
+            ValueError:
+                - If hpo_matrix is not a 2D array.
+                - If target's length does not match hpo_matrix's row count.
+                - If hpo_matrix contains values other than 0, 1, or NaN.
+                - If mask has an incompatible shape.
+                - If min_individuals_for_synergy_calculation is less than 40.
         """
-        if not isinstance(hpo_data, HpoFeatureMatrix):
-            raise TypeError("hpo_data must be an instance of HpoFeatureMatrix.")
-        
-        # --- Validate HPO matrix ---
-        hpo_matrix = hpo_data.hpo_matrix.to_numpy(copy=True)
-        self.hpo_terms = hpo_data.hpo_matrix.columns
-        valid_vals = hpo_matrix[~np.isnan(hpo_matrix)]
+        if not isinstance(dataset, PhenotypeDataset):
+            raise TypeError("dataset must be an instance of PhenotypeDataset.")
+        self.dataset = dataset
+
+        # -------------------------
+        # HPO matrix
+        # -------------------------
+        hpo_df =self.dataset.hpo_data.matrix
+        self.X = hpo_df.to_numpy(copy=True)
+        self.hpo_terms = hpo_df.columns
+        self.n_features = hpo_df.shape[1]
+        self.patient_ids = hpo_df.index
+
+        valid_vals = self.X[~np.isnan(self.X)]
         if not np.all((valid_vals == 0) | (valid_vals == 1)):
             raise ValueError("Non-NaN values in HPO Matrix must be either 0 or 1")
-       
-        # --- Validate target ---
+        
+        # -------------------------
+        # Target
+        # -------------------------
+        target = self.dataset.get_target(
+            target_type=target_type,
+            target_name=target_name,
+            positive_class=positive_class,
+        )
+
         if isinstance(target, pd.DataFrame):
             if target.shape[1] != 1:
                 raise ValueError("Target DataFrame must have exactly one column")
-            target = target.iloc[:, 0].to_numpy(copy=True)
-        elif isinstance(target, pd.Series):
-            target = target.to_numpy(copy=True)
-        else:
-            raise TypeError("target must be a pandas Series or single-column DataFrame")
-        if len(target) != hpo_matrix.shape[0]:
+            target = target.iloc[:, 0]
+        
+        y = target.to_numpy(copy=True)
+
+        if len(y) != self.X.shape[0]:
             raise ValueError("The number of samples in Target must match the number of samples in HPO Matrix")
-        valid_target = target[~np.isnan(target)]
-        if not np.all((valid_target == 0) | (valid_target == 1)):
+        
+        valid_target = y[~np.isnan(y)]
+        if not np.all(np.isin(valid_target,[1,0])):
             raise ValueError("Target must contain only 0, 1, or NaN")
 
-        self.X = hpo_matrix
-        self.y = target.copy()
-        self.patient_ids = hpo_data.hpo_matrix.index
-        self.patient_pmids = hpo_data.patient_info_df
-        self.label_mapping = hpo_data.label_mapping
-        self.n_features = hpo_matrix.shape[1]
+        self.y = y
+        self.label_mapping = self.dataset.hpo_data.label_mapping
         self.n_permutations = n_permutations
         self.rng = np.random.default_rng(random_state)
 
         # Relationship mask (ontology-aware filtering)
-        relationship_mask = hpo_data.hpo_relationship_mask
+        relationship_mask = self.dataset.hpo_data.relationship_mask
         if relationship_mask is not None:
             if relationship_mask.shape != (self.n_features, self.n_features):
                 raise ValueError("relationship_mask shape mismatch with HPO features")
@@ -119,9 +162,9 @@ class SynergyAnalyzer:
 
     @staticmethod
     def _encode_joint_binary_index( 
-            xi:np.ndarray, 
-            xj:np.ndarray
-        ) -> np.ndarray:
+        xi:np.ndarray, 
+        xj:np.ndarray
+    ) -> np.ndarray:
         """
         Encodes two binary features into a unique integer index via bitwise operations.
 
@@ -146,10 +189,10 @@ class SynergyAnalyzer:
         return (xi.astype(int) << 1) | xj.astype(int)
 
     def evaluate_pair_synergy(
-            self, 
-            i:int,
-            j:int
-        ) -> Tuple[int, int, float, float, dict]: 
+        self, 
+        i:int,
+        j:int
+    ) -> tuple[int, int, float, float, dict]: 
         """
         Compute synergy and permutation-based p-value for feature pair (i, j).
 
@@ -184,7 +227,7 @@ class SynergyAnalyzer:
             return i, j, np.nan, np.nan, {}
 
         patient_ids = self.patient_ids[mask]
-        pmids_list = self.patient_pmids.loc[patient_ids, 'pmids'].to_numpy()
+        pmids_list = self.dataset.get_pmids(patient_ids).to_numpy()
         all_pmids = set(chain.from_iterable(pmids_list))
         n_pmids = len(all_pmids)
         
@@ -225,7 +268,7 @@ class SynergyAnalyzer:
             perm_synergies[k] = mi_ij_perm - (mi_i_perm + mi_j_perm)
 
         # Calculate p-value as the proportion of permuted synergies greater than or equal to the observed synergy
-        p_value = (np.abs(perm_synergies) >= np.abs(observed_synergy)).mean()
+        p_value = (np.sum(np.abs(perm_synergies) >= np.abs(observed_synergy)) + 1) / (self.n_permutations + 1)
         
         # Correct the observed synergy by subtracting the mean of the permuted synergies
         corrected_synergy = observed_synergy - perm_synergies.mean()
@@ -234,9 +277,9 @@ class SynergyAnalyzer:
 
 
     def compute_synergy_matrix(
-            self, 
-            n_jobs=-1,
-        ) -> pd.DataFrame:
+        self, 
+        n_jobs=-1,
+    ) -> pd.DataFrame:
         """
         Compute the pairwise synergy scores and permutation-based p-values for all valid feature pairs.
 
@@ -364,12 +407,12 @@ class SynergyAnalyzer:
     
 
     def save_synergy_results(
-            self, 
-            synergy_threshold: float = 0.0,
-            alpha: float = 1.0,
-            corrected_alpha: float = 1.0,
-            output_file: str = "synergy_results.csv"
-        ) -> None:
+        self, 
+        synergy_threshold: float = 0.0,
+        alpha: float = 1.0,
+        corrected_alpha: float = 1.0,
+        output_file: str = "synergy_results.csv"
+    ) -> None:
         """
         Export synergy scores and p-values to a file (CSV or Excel).
 
@@ -429,11 +472,11 @@ class SynergyAnalyzer:
    
     
     def filter_weak_synergy(
-            self, 
-            synergy_threshold: float = 0.08, 
-            alpha: float = 0.05,
-            corrected_alpha: float = 0.1
-        ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        self, 
+        synergy_threshold: float = 0.08, 
+        alpha: float = 0.05,
+        corrected_alpha: float = 0.1
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Filter out feature pairs with weak synergy based on given threshold.
 
@@ -490,7 +533,11 @@ class SynergyAnalyzer:
 
         return synergy_matrix_cleaned, p_value_cleaned    
 
-    def _format_hpo_pair(self, hpo_id: str, label: str | None) -> str:
+    def _format_hpo_pair(
+        self, 
+        hpo_id: str, 
+        label: str | None
+    ) -> str:
         """Format HPO for display."""
         if label:
             return f"{label} ({hpo_id})"
@@ -682,10 +729,10 @@ class SynergyAnalyzer:
         return fig
     
     def save_synergy_heatmap(
-            self, 
-            fig: go.Figure, 
-            output_file: str
-        ) -> None:
+        self, 
+        fig: go.Figure, 
+        output_file: str
+    ) -> None:
         """
         Save a pairwise synergy heatmap figure to an HTML file.
 
