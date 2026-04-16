@@ -67,7 +67,7 @@ def test_filter_weak_correlations(large_hpo_data):
     coef_cleaned, pval_cleaned = analyzer.filter_weak_correlations(
         abs_threshold=0.0,
         alpha=1.0,
-        corrected_alpha=1.0
+        adj_pval_threshold=1.0
     )
 
     assert isinstance(coef_cleaned, pd.DataFrame)
@@ -90,7 +90,7 @@ def test_plot_heatmap(large_hpo_data):
         stats_name="spearman",
         abs_threshold=0.0,
         alpha=1.0,
-        corrected_alpha=1.0
+        adj_pval_threshold=1.0
     )
 
     assert fig is not None

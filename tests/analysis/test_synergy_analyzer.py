@@ -76,7 +76,7 @@ def test_filter_weak_synergy(large_hpo_data, large_target):
     filtered_synergy, filtered_p = analyzer.filter_weak_synergy(
         synergy_threshold=0.01,
         alpha=1.0,
-        corrected_alpha=1.0
+        adj_pval_threshold=1.0
     )
 
     assert filtered_synergy.shape[0] <= analyzer.synergy_matrix.shape[0]
@@ -90,7 +90,7 @@ def test_plot_synergy_heatmap(large_hpo_data, large_target):
     fig = analyzer.plot_synergy_heatmap(
         synergy_threshold=0.01,
         alpha=1.0,
-        corrected_alpha=1.0,
+        adj_pval_threshold=1.0,
         target_name="Test Target"
     )
 
@@ -106,7 +106,7 @@ def test_save_synergy_heatmap(tmp_path, large_hpo_data, large_target):
     fig = analyzer.plot_synergy_heatmap(
         synergy_threshold=0.01,
         alpha=1.0,
-        corrected_alpha=1.0
+        adj_pval_threshold=1.0
     )
 
     output_file = tmp_path / "heatmap.html"
