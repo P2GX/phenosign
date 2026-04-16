@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 from ..core import PhenopacketRecord
 from ..core import TargetData
@@ -54,10 +55,16 @@ class TargetDataBuilder:
     # ------------------------------------------------------------------
 
     def build_disease_matrix(
-        self
+        self,
+        fill_unknown_with_zero: bool = True,
     ) -> pd.DataFrame:
         """
         Build disease status matrix.
+
+        Args:
+            fill_unknown_with_zero : bool
+            If True, unknown diseases are encoded as 0.
+            If False, unknown diseases are left as NaN.
 
         Returns:
             pd.DataFrame
@@ -80,11 +87,18 @@ class TargetDataBuilder:
 
         for r in self.records:
             # Start with unknown
-            row = {d: 0.0 for d in all_diseases}
+            if fill_unknown_with_zero:
+                row = {d: 0.0 for d in all_diseases}
+            else:
+                row = {d: np.nan for d in all_diseases}
+                for d in r.excluded_diseases:
+                    row[d] = 0.0
 
             # Observed diseases → 1
             for d in r.observed_diseases:
                 row[d] = 1.0
+
+            
 
             data[r.patient_id] = row
 
@@ -99,14 +113,14 @@ class TargetDataBuilder:
 
     def build_variant_condition_matrix(
         self,
-        variant_effect_type: VariantEffect,
+        variant_effect_type: list[VariantEffect],
         mane_tx_id: str | list[str],
     ) -> pd.DataFrame:
         """
         Build a binary variant condition matrix using gpsea classifiers.
 
         Args:
-            variant_effect_type : VariantEffect
+            variant_effect_type : lsit[VariantEffect]
                 Variant effect class to evaluate.
             mane_tx_id : str | list[str]
                 Transcript ID(s) used to filter the variant effect.
@@ -205,7 +219,7 @@ class TargetDataBuilder:
             TargetData
         """
         disease_matrix = (
-            self.build_disease_matrix()
+            self.build_disease_matrix(fill_unknown_with_zero=True)
         )
         variant_matrix = None
 

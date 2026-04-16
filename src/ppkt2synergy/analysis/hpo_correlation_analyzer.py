@@ -80,9 +80,8 @@ class HPOStatisticsAnalyzer:
         self.label_mapping = self.dataset.hpo_data.label_mapping 
 
         relationship_mask = self.dataset.hpo_data.relationship_mask
+
         if relationship_mask is not None:
-            if relationship_mask.shape != (self.n_features, self.n_features):
-                raise ValueError("relationship_mask shape mismatch with HPO features")
             self.relationship_mask = relationship_mask.to_numpy(copy=True)
         else:
             logger.warning("No relationship_mask provided. All feature pairs will be evaluated for synergy.")
@@ -184,26 +183,52 @@ class HPOStatisticsAnalyzer:
         count_01 = np.sum((col_A_values == 0) & (col_B_values == 1))
         count_00 = np.sum((col_A_values == 0) & (col_B_values == 0))
         total = len(col_A_values)
+
+        empty_counts = {
+        "00": 0,
+        "01": 0,
+        "10": 0,
+        "11": 0,
+        "N": 0,
+        "n_pmid": np.nan,
+        "pmids": [],
+    }
         
         if np.all(col_A_values == col_A_values[0]) or np.all(col_B_values == col_B_values[0]):
-            return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
+            return (col_A, col_B, np.nan, np.nan, empty_counts)
         
         # --- Count co-occurrence ---
         excluded_excluded = np.sum((col_A_values == 0) & (col_B_values == 0))
 
         if excluded_excluded <= self.min_coccurrence_count:
-            return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
+            return (col_A, col_B, np.nan, np.nan, empty_counts)
 
         try:
             coef, p_val = self._calculate_stats(col_A_values, col_B_values, correlation_type=correlation_type)
             patient_ids = self.hpo_matrix.index[mask]
             pmids_list = self.dataset.get_pmids(patient_ids).to_numpy()
-            all_pmids = set(chain.from_iterable(pmids_list))
+            all_pmids = sorted(
+            {
+                str(pmid)
+                for pmids in pmids_list
+                if pmids is not None
+                for pmid in pmids
+                if pd.notna(pmid)
+            }
+            )
             n_pmids = len(all_pmids)
-            return (col_A, col_B, coef, p_val, {"00":count_00,"01":count_01,"10":count_10,"11":count_11,"N":total,"n_pmid": n_pmids})
+            return (col_A, col_B, coef, p_val, {
+                "00": count_00,
+                "01": count_01,
+                "10": count_10,
+                "11": count_11,
+                "N": total,
+                "n_pmid": n_pmids,
+                "pmids": all_pmids,
+            })
         except Exception as e:
             logger.error(f"Error calculating correlation for columns {col_A} and {col_B}: {e}")
-            return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
+            return (col_A, col_B, np.nan, np.nan, empty_counts)
 
     def compute_correlation_matrix(
         self, 
@@ -243,6 +268,7 @@ class HPOStatisticsAnalyzer:
                     - Count_11 (int): Number of individuals with (1,1).
                     - n_patients (int): Total number of valid individuals.
                     - n_pmids (int): Number of PubMed references associated with the pair (if available).
+                    - pmids (list): List of unique PubMed IDs (PMIDs) supporting the pair, aggregated from the contributing individuals. Empty if no references are available.
 
         Side Effects:
             - Stores the full correlation coefficient matrix in `self.coef_df`.
@@ -300,7 +326,8 @@ class HPOStatisticsAnalyzer:
                     "Count_10": counts["10"],
                     "Count_11": counts["11"],
                     "n_patients": counts["N"],
-                    "n_pmids": counts["n_pmid"]
+                    "n_pmids": counts["n_pmid"],
+                    "pmids": ";".join(counts.get("pmids", []))
                     })
 
         valid_mask = ~(np.isnan(matrix).all(axis=0)) | (np.nan_to_num(matrix, nan=0).sum(axis=0) == 0)
@@ -328,8 +355,7 @@ class HPOStatisticsAnalyzer:
     def save_correlation_results(
         self, 
         abs_threshold: float = 0.0,
-        alpha: float = 1.0,
-        corrected_alpha: float = 1.0,
+        adj_pval_threshold: float = 1.0,
         output_file: str="correlation_results.csv"
     ) -> None:
         """
@@ -342,13 +368,10 @@ class HPOStatisticsAnalyzer:
             abs_threshold (float): (default: 0.0)
                 Minimum absolute correlation coefficient to retain. Correlations with 
                 |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0. 
-            alpha (float): (default: 1.0)
-                Significance threshold for uncorrected p-values. Correlations with 
-                p-value >= alpha will be filtered out. Range: 0.0 <= alpha <= 1.0.
-            corrected_alpha (float): (default: 1.0)
+            adj_pval_threshold (float): (default: 1.0)
                 Significance threshold for multiple-testing corrected p-values. Correlations 
-                with corrected p-value >= corrected_alpha will be filtered out. Range: 
-                0.0 <= corrected_alpha <= 1.0.
+                with corrected p-value >= adj_pval_threshold will be filtered out. Range: 
+                0.0 <= adj_pval_threshold <= 1.0.
             output_file (str):
                 Path to the output file. Supported formats:
                 - ".csv": saves as a CSV file.
@@ -376,12 +399,10 @@ class HPOStatisticsAnalyzer:
             raise ValueError("abs_threshold must be between 0.0 and 1.0")
         df = df[df["correlation"].abs() >= abs_threshold]
 
-        if alpha < 0.0 or alpha > 1.0:
-            raise ValueError("alpha must be between 0.0 and 1.0")
-        if corrected_alpha < 0.0 or corrected_alpha > 1.0:
-            raise ValueError("corrected_alpha must be between 0.0 and 1.0")
+        if adj_pval_threshold < 0.0 or adj_pval_threshold > 1.0:
+            raise ValueError("adj_pval_threshold must be between 0.0 and 1.0")
 
-        df = df[(df["p_value"] < alpha) & (df["p_value_corrected"] < corrected_alpha)]
+        df = df[df["p_value_corrected"] < adj_pval_threshold]
 
         ext = path.splitext(output_file)[1].lower()
         if ext not in [".csv", ".xlsx"]:
@@ -396,8 +417,7 @@ class HPOStatisticsAnalyzer:
     def filter_weak_correlations(
         self, 
         abs_threshold: float = 0.55,
-        alpha: float = 0.05,
-        corrected_alpha: float = 0.1
+        adj_pval_threshold: float = 0.1
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Remove weak correlations from the correlation matrix based on the given threshold.
@@ -405,14 +425,11 @@ class HPOStatisticsAnalyzer:
         Args:
             abs_threshold (float): (default: 0.55)
                 Minimum absolute correlation coefficient to retain. Correlations with 
-                |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0. 
-            alpha (float): (default: 0.05)
-                Significance threshold for uncorrected p-values. Correlations with 
-                p-value >= alpha are set to NaN. Must satisfy 0.0 <= alpha <= 1.0. 
-            corrected_alpha (float): (default: 0.1)
+                |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0.  
+            adj_pval_threshold (float): (default: 0.1)
                 Significance threshold for multiple-testing corrected p-values. Correlations 
-                with corrected p-value >= corrected_alpha are set to NaN. Range: 0.0 <= 
-                corrected_alpha <= 1.0.
+                with corrected p-value >= adj_pval_threshold are set to NaN. Range: 0.0 <= 
+                adj_pval_threshold <= 1.0.
 
         Returns:
             Tuple[pd.DataFrame, pd.DataFrame]:
@@ -433,14 +450,11 @@ class HPOStatisticsAnalyzer:
         coef_matrix[mask] = np.nan
         p_value[mask] = np.nan
 
-        if alpha < 0.0 or alpha > 1.0:
-            raise ValueError("alpha must be between 0.0 and 1.0")
-        if corrected_alpha < 0.0 or corrected_alpha > 1.0:
-            raise ValueError("corrected_alpha must be between 0.0 and 1.0")
+        if adj_pval_threshold < 0.0 or adj_pval_threshold > 1.0:
+            raise ValueError("adj_pval_threshold must be between 0.0 and 1.0")
         
         non_signif = self.correlation_results.loc[
-            (self.correlation_results["p_value"] >= alpha) &
-            (self.correlation_results["p_value_corrected"] >= corrected_alpha),
+            (self.correlation_results["p_value_corrected"] >= adj_pval_threshold),
             ["HPO_A", "HPO_B"]
         ]
         for _, row in non_signif.iterrows():
@@ -467,13 +481,35 @@ class HPOStatisticsAnalyzer:
         if label:
             return f"{label} ({hpo_id})"
         return hpo_id
+    
+    def _format_pmids_for_tooltip(
+        self,
+        pmids: str | list[str] | None,
+        max_pmids: int = 5,
+    ) -> str:
+        if pmids is None or pmids == "":
+            return "None"
+
+        if isinstance(pmids, str):
+            pmid_list = [p.strip() for p in pmids.split(";") if p.strip()]
+        else:
+            pmid_list = [str(p).strip() for p in pmids if str(p).strip()]
+
+        if not pmid_list:
+            return "None"
+
+        if len(pmid_list) <= max_pmids:
+            return ", ".join(pmid_list)
+
+        shown = ", ".join(pmid_list[:max_pmids])
+        remaining = len(pmid_list) - max_pmids
+        return f"{shown} ... (+{remaining} more)"
 
     def plot_correlation_heatmap_with_significance(
         self,
         stats_name: str = "spearman",
         abs_threshold: float = 0.55,
-        alpha: float = 0.05,
-        corrected_alpha: float = 0.1,
+        adj_pval_threshold: float = 0.1,
         title_name: str = "",
     ) -> go.Figure:
         """
@@ -486,13 +522,10 @@ class HPOStatisticsAnalyzer:
             abs_threshold (float): (default: 0.55)
                 Minimum absolute correlation coefficient to retain. Correlations with 
                 |r| > abs_threshold are saved. Must satisfy 0.0 <= abs_threshold <= 1.0. 
-            alpha (float): (default: 0.05)
-                Significance threshold for uncorrected p-values. Correlations with 
-                p-value >= alpha are set to NaN. Must satisfy 0.0 <= alpha <= 1.0.
-            corrected_alpha (float): (default: 0.1)
+            adj_pval_threshold (float): (default: 0.1)
                 Significance threshold for multiple-testing corrected p-values. Correlations 
-                with corrected p-value >= corrected_alpha are set to NaN. Range: 0.0 <= 
-                corrected_alpha <= 1.0.
+                with corrected p-value >= adj_pval_threshold are set to NaN. Range: 0.0 <= 
+                adj_pval_threshold <= 1.0.
             title_name (str, optional): 
                 Optional subtitle to display under the main title.
 
@@ -507,7 +540,6 @@ class HPOStatisticsAnalyzer:
             >>> fig = analyzer.plot_correlation_heatmap_with_significance(
             ...     stats_name="spearman",
             ...     abs_threshold=0.55,
-            ...     alpha=0.05, 
             ...     corrected_alpha=0.1,
             ...     title_name="Cohort A"
             ... )
@@ -517,12 +549,38 @@ class HPOStatisticsAnalyzer:
         # --- Compute correlation and filter weak correlations ---
         coef_matrix, pval_matrix = self.filter_weak_correlations(
             abs_threshold=abs_threshold,
-            alpha=alpha,
-            corrected_alpha=corrected_alpha
+            adj_pval_threshold=adj_pval_threshold
         )
 
         if coef_matrix.empty or np.isnan(coef_matrix.values).all():
             raise ValueError("Coefficient matrix is empty. Try adjusting the abs_threshold parameter.")
+
+        raw_coef_df = self.coef_df.loc[coef_matrix.index, coef_matrix.columns]
+
+        relationship_mask_df = pd.DataFrame(
+            self.relationship_mask,
+            index=self.hpo_terms,
+            columns=self.hpo_terms
+        ).loc[coef_matrix.index, coef_matrix.columns]
+
+        status_matrix = pd.DataFrame(
+            "hidden_upper_triangle",
+            index=coef_matrix.index,
+            columns=coef_matrix.columns
+        )
+
+        relationship_isna = relationship_mask_df.isna()
+        relationship_notna = ~relationship_isna
+
+        # ontology related
+        status_matrix[relationship_isna] = "ontology_related"
+
+        # invalid computation
+        status_matrix[raw_coef_df.isna() & relationship_notna] = "invalid_computation"
+
+        # filtered by statistics
+        status_matrix[raw_coef_df.notna() & coef_matrix.isna()] = "filtered_by_statistics"
+
         # --- Dynamic layout scaling based on matrix size ---
         n_rows, n_cols = coef_matrix.shape
         cell_size = 60  # Base pixel size per cell
@@ -535,7 +593,18 @@ class HPOStatisticsAnalyzer:
         annot_fontsize = max(6, 12 - max_dim // 8)
 
         # --- Prepare matrix and annotations ---
-        display_matrix = coef_matrix.fillna(0)
+        triangle_mask = pd.DataFrame(
+            np.tril(np.ones(coef_matrix.shape, dtype=bool), k=0),
+            index=coef_matrix.index,
+            columns=coef_matrix.columns
+        )
+        coef_matrix = coef_matrix.where(triangle_mask)
+        pval_matrix = pval_matrix.where(triangle_mask)
+        display_matrix = coef_matrix.where(triangle_mask)
+
+        nan_bg = pd.DataFrame(np.nan, index=coef_matrix.index, columns=coef_matrix.columns)
+        nan_bg[triangle_mask & coef_matrix.isna()] = 2
+
         text_matrix = np.where(
             np.isnan(coef_matrix.values),
             "",
@@ -543,7 +612,6 @@ class HPOStatisticsAnalyzer:
         )
 
         # --- Generate custom hover text per cell ---
-        hover_text = np.empty_like(coef_matrix, dtype=object)
         counts_lookup = {}
         for row in self.correlation_results.itertuples():
             # forward (original counts)
@@ -556,7 +624,8 @@ class HPOStatisticsAnalyzer:
                 "Count_10": row.Count_10,
                 "Count_11": row.Count_11,
                 "n_patients": row.n_patients,
-                "n_pmids": row.n_pmids
+                "n_pmids": row.n_pmids,
+                "pmids": getattr(row, "pmids", ""),
             }
             # backward (exchange Count_01 和 Count_10)
             counts_lookup[(row.HPO_B, row.HPO_A)] = {
@@ -568,7 +637,8 @@ class HPOStatisticsAnalyzer:
                 "Count_10": row.Count_01,  # swapped
                 "Count_11": row.Count_11,
                 "n_patients": row.n_patients,
-                "n_pmids": row.n_pmids
+                "n_pmids": row.n_pmids,
+                "pmids": getattr(row, "pmids", ""),
             }
 
 
@@ -578,46 +648,83 @@ class HPOStatisticsAnalyzer:
             for j, col in enumerate(coef_matrix.columns):
                 coef = coef_matrix.iloc[i, j]
                 pval = pval_matrix.iloc[i, j]
-                if np.isnan(coef):
+
+                display_row = self._format_hpo_pair(row, self.label_mapping.get(row))
+                display_col = self._format_hpo_pair(col, self.label_mapping.get(col))
+
+                if not triangle_mask.iloc[i, j]:
                     hover_row.append("")
+                elif np.isnan(coef):
+                    status = status_matrix.iloc[i, j]
+                    reason_map = {
+                        "ontology_related": "these two HPO terms are ontologically related (ancestor/descendant/self).",
+                        "invalid_computation": "the correlation could not be computed for this HPO pair.",
+                        "filtered_by_statistics": (
+                            f"the correlation did not pass the statistical filters "
+                            f"(|corr| >= {abs_threshold} and adjusted p-value < {adj_pval_threshold})."
+                        ),
+                        "hidden_upper_triangle": "only the lower-left triangle is displayed.",
+                    }
+
+                    reason_text = reason_map.get(status, f"{status}")
+
+                    hover_row.append(
+                        f"<b>HPO_A</b>: {display_col}<br>"
+                        f"<b>HPO_B</b>: {display_row}<br>"
+                        f"<b>Not shown due to</b>: {reason_text}"
+                    )
+
                 else:
-                    display_row = self._format_hpo_pair(row, self.label_mapping.get(row))
-                    display_col = self._format_hpo_pair(col, self.label_mapping.get(col))
                     counts = counts_lookup.get((row, col), {})
+                    pmid_text = self._format_pmids_for_tooltip(
+                        counts.get("pmids", ""),
+                        max_pmids=4,
+                    )
                     hover_row.append(
                         f"<b>HPO_A</b>: {display_col}<br><b>HPO_B</b>: {display_row}<br>"
                         f"<b>Corr</b>: {coef:.2f}<br><b>p-val</b>: {pval:.6f}<br>"
                         f"<b>p-val_corrected</b>: {counts.get('P_value_corrected', np.nan):.6f}<br>"
-                        f"<b>Counts_ab</b>: {counts.get('Count_00', 0)}, "
-                        f"<b>Counts_aB</b>: {counts.get('Count_01', 0)}, "
-                        f"<b>Counts_Ab</b>: {counts.get('Count_10', 0)}, "
-                        f"<b>Counts_AB</b>: {counts.get('Count_11', 0)}<br>"
-                        f"<b>Total patients</b>: {counts.get('n_patients', 0)}<br>"
-                        f"<b>PMIDs</b>: {counts.get('n_pmids', 0)}"
+                        f"<b>Counts(A/B): E/E</b>: {counts.get('Count_00', 0)}, "
+                        f"<b>E/O</b>: {counts.get('Count_01', 0)}, "
+                        f"<b>O/E</b>: {counts.get('Count_10', 0)}, "
+                        f"<b>O/O</b>: {counts.get('Count_11', 0)}<br>"
+                        f"<b>Total individuals</b>: {counts.get('n_patients', 0)}<br>"
+                        f"<b>N_PMIDs</b>: {counts.get('n_pmids', 0)}<br>"
+                        f"<b>PMIDs</b>: {pmid_text}"
                     )
             hover_text.append(hover_row)
           
         coef_matrix.rename(index=self.label_mapping, columns=self.label_mapping, inplace=True)
         
         # --- Create heatmap figure ---
-        fig = go.Figure(
-            go.Heatmap(
+        fig = go.Figure()
+        fig.add_trace(go.Heatmap(
+            z=nan_bg.values,
+            x=coef_matrix.columns,
+            y=coef_matrix.index,
+            colorscale=[[0, "#dbe7f3"], [1, "#dbe7f3"]],
+            showscale=False,
+            hoverinfo="skip",
+            xgap=1,
+            ygap=1,
+        ))
+        fig.add_trace(go.Heatmap(
                 z=display_matrix.values,
                 x=coef_matrix.columns,
                 y=coef_matrix.index,
-                colorscale="RdBu",
+                colorscale="Tealgrn",
+                zmin=-1,
+                zmax=1,
                 zmid=0,
                 text=text_matrix,
                 texttemplate=f"<span style='font-size:{annot_fontsize}px'>%{{text}}</span>",
                 hovertext=hover_text,
                 hoverinfo="text",
                 colorbar=dict(title="Corr.", len=0.8, thickness=title_fontsize),
-                zmin=-1,
-                zmax=1,
                 xgap=1,
                 ygap=1,
-            )
-        )
+            ))
+        
 
         # --- Adjust layout ---
         max_ylabel_len = max(len(str(lbl)) for lbl in coef_matrix.index)
@@ -646,8 +753,11 @@ class HPOStatisticsAnalyzer:
             ),
             width=fig_size + left_margin,
             height=fig_size + left_margin,
-            plot_bgcolor="rgba(240,240,240,0.1)"
+            plot_bgcolor="white",
+            paper_bgcolor="white"
         )
+        fig.update_yaxes(autorange="reversed")
+
         return fig
     
 

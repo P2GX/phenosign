@@ -38,25 +38,42 @@ class HpoFeatureData:
 
         if self.matrix.index.has_duplicates:
             raise ValueError("matrix index must be unique")
+        
+        # Validate matrix values: only 0, 1, NaN
+        invalid = ~self.matrix.isin([0, 1]) & self.matrix.notna()
+        if invalid.any().any():
+            bad_vals = pd.unique(self.matrix[invalid].values.ravel())
+            raise ValueError(
+                f"matrix must contain only 0, 1, or NaN. Found: {bad_vals.tolist()}"
+            )
 
-        if self.relationship_mask is not None and not self.relationship_mask.empty:
-            terms_set = set(self.matrix.columns)
-            mask_rows_set = set(self.relationship_mask.index)
-            mask_cols_set = set(self.relationship_mask.columns)
+        # --- relationship_mask checks ---
+        if self.relationship_mask is None:
+            return
 
-            missing_rows = terms_set - mask_rows_set
-            extra_rows = mask_rows_set - terms_set
-            missing_cols = terms_set - mask_cols_set
-            extra_cols = mask_cols_set - terms_set
+        mask = self.relationship_mask
 
-            if missing_rows or extra_rows or missing_cols or extra_cols:
-                raise ValueError(
-                    "relationship_mask rows/columns do not match matrix columns.\n"
-                    f"Missing rows: {missing_rows}\n"
-                    f"Extra rows: {extra_rows}\n"
-                    f"Missing cols: {missing_cols}\n"
-                    f"Extra cols: {extra_cols}"
-                )
+        if not isinstance(mask, pd.DataFrame):
+            raise TypeError("relationship_mask must be a pandas DataFrame")
+
+        if mask.shape[0] != mask.shape[1]:
+            raise ValueError("relationship_mask must be a square matrix")
+
+        if mask.index.has_duplicates or mask.columns.has_duplicates:
+            raise ValueError("relationship_mask index/columns must be unique")
+
+        # --- index/column match ---
+        if not (mask.index.equals(self.matrix.columns) and
+                mask.columns.equals(self.matrix.columns)):
+            raise ValueError("relationship_mask must match matrix columns exactly")
+
+        # --- mask value check (0 / NaN) ---
+        invalid_mask = ~mask.isin([0]) & mask.notna()
+        if invalid_mask.any().any():
+            bad_vals = pd.unique(mask[invalid_mask].values.ravel())
+            raise ValueError(
+                f"relationship_mask must contain only 0 or NaN. Found: {bad_vals.tolist()}"
+            )
 
     @property
     def feature_names(self) -> pd.Index:
