@@ -2,11 +2,11 @@ import pytest
 import numpy as np
 import pandas as pd
 from ppkt2synergy import SynergyAnalyzer
-from ppkt2synergy.preprocessing.matrices import HpoFeatureMatrix
+from ppkt2synergy.preprocessing.matrices import HpoFeatureData
 
 
 # ---- Mock class ----
-class MockHpoFeatureMatrix(HpoFeatureMatrix):
+class MockHpoFeatureMatrix(HpoFeatureData):
     def __init__(self, hpo_matrix, relationship_mask, pmids_matrix):
         self.hpo_matrix = hpo_matrix
         self.hpo_relationship_mask = relationship_mask

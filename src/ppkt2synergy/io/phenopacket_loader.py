@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 import phenopackets as ppkt
-from typing import List
 from ppktstore.registry import configure_phenopacket_registry
-
 
 @dataclass(slots=True)
 class EnrichedPhenopacket:
@@ -12,17 +10,16 @@ class EnrichedPhenopacket:
 
     @property
     def id(
-            self
-        ) -> str:
-        """Get patient ID from the underlying phenopacket."""
+        self
+    ) -> str:
+        """Return the patient ID from the underlying Phenopacket."""
         return self.phenopacket.id
 
 
-
 def load_phenopackets(
-    cohorts: str | List[str] | None = None,
+    cohorts: str | list[str] | None = None,
     ppkt_store_version: str | None = None,
-) -> List[EnrichedPhenopacket]:
+) -> list[EnrichedPhenopacket]:
     """
     Load Phenopackets from the configured Phenopacket Store.
 
@@ -61,9 +58,9 @@ def load_phenopackets(
 
             # --- load phenopackets ---
             enrichedphenopackets = []
-            for name in cohort_names:
-                for ppkt in ps.iter_cohort_phenopackets(name):
-                    enrichedphenopackets.append(EnrichedPhenopacket(phenopacket=ppkt, cohort=name))
+            for cohort_name in cohort_names:
+                for phenopacket in ps.iter_cohort_phenopackets(cohort_name):
+                    enrichedphenopackets.append(EnrichedPhenopacket(phenopacket=phenopacket, cohort=cohort_name))
         return enrichedphenopackets
     except Exception as e:
         raise RuntimeError(
