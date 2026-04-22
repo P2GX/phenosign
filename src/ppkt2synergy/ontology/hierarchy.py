@@ -11,13 +11,11 @@ logger = logging.getLogger(__name__)
 
 class HPOHierarchyEngine:
     """
-    Perform hierarchy-aware operations on HPO matrices.
+    Perform hierarchy-aware operations on HPO feature matrices.
 
-    This class supports:
-
-    - propagation of observed terms (1) to ancestor terms
-    - propagation of excluded terms (0) to descendant terms
-    - construction of relationship masks for valid pairwise analysis
+    This class supports propagation of observed and excluded terms through
+    the HPO hierarchy, as well as construction of relationship masks for
+    pairwise analyses.
 
     Notes
     -----
@@ -44,6 +42,7 @@ class HPOHierarchyEngine:
     ) -> None:
         self.term_manager = HPOTermManager(hpo_file=hpo_file, release=release)
 
+
     def propagate(
         self, 
         matrix: pd.DataFrame
@@ -51,18 +50,18 @@ class HPOHierarchyEngine:
         """
         Propagate HPO observations and exclusions through the ontology hierarchy.
 
-        Rules
-        -----
-        - Observed (1) propagates upward to ancestors.
-        - Excluded (0) propagates downward to descendants.
+        Observed terms (``1``) are propagated to ancestor terms, and excluded
+        terms (``0``) are propagated to descendant terms.
 
-        Args:
-            matrix : pd.DataFrame
-                HPO status matrix with patients as rows and HPO terms as columns.
+        Parameters
+        ----------
+        matrix : pd.DataFrame
+            HPO status matrix with individuals as rows and HPO terms as columns.
 
-        Returns:
-            pd.DataFrame
-                Matrix with propagated values and canonicalized HPO term IDs.
+        Returns
+        -------
+        pd.DataFrame
+            Matrix with propagated values and canonicalized HPO term IDs.
         """
         matrix = matrix.copy()
 
@@ -88,7 +87,7 @@ class HPOHierarchyEngine:
                     conflict_mask = observed_mask & (matrix[ancestor] == 0)
                     if conflict_mask.any():
                         logger.warning(
-                            "[Conflict] %d samples: %s=1 but ancestor %s=0",
+                            "Conflict %d samples: %s=1 but ancestor %s=0",
                             int(conflict_mask.sum()),
                             term,
                             ancestor,
@@ -102,7 +101,7 @@ class HPOHierarchyEngine:
                     conflict_mask = excluded_mask & (matrix[descendant] == 1)
                     if conflict_mask.any():
                         logger.warning(
-                            "[Conflict] %d samples: %s=0 but descendant %s=1",
+                            "Conflict %d samples: %s=0 but descendant %s=1",
                             int(conflict_mask.sum()),
                             term,
                             descendant,
@@ -111,6 +110,7 @@ class HPOHierarchyEngine:
                     matrix.loc[update_mask, descendant] = 0
 
         return matrix
+    
 
     def build_relationship_mask(
         self, 
@@ -119,23 +119,25 @@ class HPOHierarchyEngine:
         """
         Build a pairwise relationship mask for HPO terms.
 
-        Args:
-            terms : Sequence[str]
-                HPO term IDs to include.
+        Parameters
+        ----------
+        terms : Sequence[str]
+            Canonical HPO term IDs (typically obtained after propagation).
+            The input order is preserved.
 
-        Returns:
-            pd.DataFrame
-                Square matrix indexed by HPO term IDs where:
-                - NaN means related (ancestor/descendant/self)
-                - 0 means unrelated
+        Returns
+        -------
+        pd.DataFrame
+            Square matrix indexed by HPO term IDs, where ``NaN`` indicates
+            related terms (ancestor, descendant, or self) and ``0`` indicates
+            unrelated terms.
 
         Notes
         -----
-        This mask is useful for excluding ontology-related term pairs from
+        This mask can be used to exclude ontology-related term pairs from
         pairwise correlation or synergy analyses.
         """
         terms = list(terms)
-        self.term_manager.prepare_terms(set(terms))
 
         mask = pd.DataFrame(0.0, index=terms, columns=terms)
 
@@ -153,11 +155,12 @@ class HPOHierarchyEngine:
             mask.loc[term, term] = np.nan
 
         return mask
+    
 
     def get_labels(self) -> dict[str, str]:
         """Return cached HPO term labels."""
         return self.term_manager.get_labels()
 
     def get_id_mapping(self) -> dict[str, str]:
-        """Return cached original-to-canonical ID mapping."""
+        """Return cached mapping from original to canonical HPO term IDs."""
         return self.term_manager.get_id_mapping()

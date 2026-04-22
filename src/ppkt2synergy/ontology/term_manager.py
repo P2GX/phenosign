@@ -8,21 +8,17 @@ logger = logging.getLogger(__name__)
 
 class HPOTermManager:
     """
-    Manage HPO terms and cache ontology relationships.
+    Manage HPO term normalization and cached ontology relationships.
 
-    This class provides a lightweight interface around the loaded HPO ontology.
-    It is responsible for:
-
-    - resolving term IDs to canonical primary IDs
-    - caching ancestor relationships
-    - caching descendant relationships
-    - caching term labels
+    This class provides a lightweight interface to the loaded HPO ontology.
+    It resolves term IDs to canonical identifiers and caches ancestors,
+    descendants, labels, and original-to-canonical ID mappings.
 
     Notes
     -----
-    - Invalid HPO terms are skipped during bulk preparation with a warning.
-    - Individual resolution via `resolve_term_id` raises ValueError if the term
-      is not found in the ontology.
+    Invalid HPO terms are skipped during bulk preparation with a warning.
+    Individual term resolution via ``resolve_term_id`` raises ``ValueError``
+    if the term is not found in the ontology.
     """
 
     def __init__(
@@ -31,12 +27,13 @@ class HPOTermManager:
         release: str | None = None,
     ) -> None:
         """
-        Args:
-            hpo_file : str | IO | None, optional
-                Path or file-like object for a local HPO ontology file.
-            release : str | None, optional
-                Specific HPO release version to load. If None, the latest
-                available release is used.
+        Parameters
+        ----------
+        hpo_file : str | IO | None, optional
+            Path, URL, or file-like object pointing to an HPO ontology file.
+        release : str | None, optional
+            HPO release identifier. If ``None``, the latest available
+            release is used.
         """
         self.hpo = load_hpo(file=hpo_file, release=release)
 
@@ -52,16 +49,20 @@ class HPOTermManager:
         """
         Resolve an HPO term ID to its canonical primary ID.
 
-        Args:
-            term_id : str
-                HPO term ID, e.g. "HP:0001250".
+        Parameters
+        ----------
+        term_id : str
+            HPO term ID, for example ``"HP:0001250"``.
 
-        Returns:
-            str
-                Canonical HPO term ID.
-        Raises:
-            ValueError
-                If the term ID is not found in the ontology.
+        Returns
+        -------
+        str
+            Canonical HPO term ID.
+
+        Raises
+        ------
+        ValueError
+            If the term ID is not found in the ontology.
         """
         term = self.hpo.get_term(term_id=term_id)
         if term is None:
@@ -77,13 +78,15 @@ class HPOTermManager:
 
         Invalid terms are skipped with a warning.
 
-        Args:
-            terms : set[str]
-                Input HPO term IDs.
+        Parameters
+        ----------
+        terms : set[str]
+            Input HPO term IDs.
 
-        Returns:
-            set[str]
-                Valid canonical HPO term IDs.
+        Returns
+        -------
+        set[str]
+            Valid canonical HPO term IDs.
         """
         resolved_terms: set[str] = set()
 
@@ -91,7 +94,7 @@ class HPOTermManager:
             try:
                 primary_id = self.resolve_term_id(term)
                 if primary_id != term:
-                    logger.info("Resolved term ID '%s' to primary ID '%s'", term, primary_id)
+                    logger.info("Resolved term ID %r to primary ID %r", term, primary_id)
 
                 resolved_terms.add(primary_id)
                 self._id_mapping_cache[term] = primary_id
@@ -100,7 +103,7 @@ class HPOTermManager:
                     self._label_cache[primary_id] = self.hpo.get_term(term_id=primary_id).name
 
             except ValueError as exc:
-                logger.warning("%s - skipping term '%s'", exc, term)
+                logger.warning("%s Skipping term %r", exc, term)
 
         new_terms = resolved_terms - self._ancestor_cache.keys()
 
@@ -110,7 +113,7 @@ class HPOTermManager:
                     ancestor.value for ancestor in self.hpo.graph.get_ancestors(term)
                 }
             except Exception as exc:
-                logger.warning("Failed to fetch ancestors for '%s': %s", term, exc)
+                logger.warning("Failed to fetch ancestors for %r: %s", term, exc)
                 self._ancestor_cache[term] = set()
 
             try:
@@ -118,23 +121,23 @@ class HPOTermManager:
                     descendant.value for descendant in self.hpo.graph.get_descendants(term)
                 }
             except Exception as exc:
-                logger.warning("Failed to fetch descendants for '%s': %s", term, exc)
+                logger.warning("Failed to fetch descendants for %r: %s", term, exc)
                 self._descendant_cache[term] = set()
 
         return resolved_terms
 
     def get_ancestors(self, term: str) -> set[str]:
-        """Return cached ancestors of a term."""
+        """Return cached ancestor terms for a canonical HPO term ID."""
         return self._ancestor_cache.get(term, set())
 
     def get_descendants(self, term: str) -> set[str]:
-        """Return cached descendants of a term."""
+        """Return cached descendant terms for a canonical HPO term ID."""
         return self._descendant_cache.get(term, set())
 
     def get_labels(self) -> dict[str, str]:
-        """Return cached HPO term labels."""
+        """Return cached labels for canonical HPO term IDs."""
         return dict(self._label_cache)
 
     def get_id_mapping(self) -> dict[str, str]:
-        """Return cached original-to-canonical term ID mappings."""
+        """Return cached mappings from original to canonical HPO term IDs."""
         return dict(self._id_mapping_cache)

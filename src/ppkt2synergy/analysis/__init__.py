@@ -1,9 +1,9 @@
-from .hpo_correlation_analyzer import HPOStatisticsAnalyzer
+from .hpo_correlation_analyzer import HPOCorrelationAnalyzer
 from .synergy_analyzer import SynergyAnalyzer
 from .correlation_type import CorrelationType
 
 __all__ = [
-    "HPOStatisticsAnalyzer",
+    "HPOCorrelationAnalyzer",
     "SynergyAnalyzer",
     "CorrelationType"
 ]
