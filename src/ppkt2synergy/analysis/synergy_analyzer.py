@@ -2,7 +2,6 @@ from sklearn.metrics import mutual_info_score
 from joblib import Parallel, delayed
 import numpy as np
 import pandas as pd
-from ..core import PhenotypeDataset
 import plotly.graph_objs as go
 import logging
 import os
@@ -10,20 +9,17 @@ from tqdm import tqdm
 from statsmodels.stats.multitest import multipletests
 from scipy.sparse import coo_matrix, triu
 
+from ..core import PhenotypeDataset
+
 logger = logging.getLogger(__name__)
 
 class SynergyAnalyzer:
     """
-    Analyze pairwise synergy between HPO features with respect to a selected target.
+    Analyze pairwise synergy between HPO terms with respect to a target.
 
-    This class computes pairwise feature synergy using mutual information and
-    permutation testing. The target can be either:
-
-    1. a pre-built target stored in `dataset.targets`
-       - e.g. "disease", "variant_condition"
-
-    2. a metadata-derived binary target generated on the fly
-       - e.g. "sex", "cohort"
+    This class computes pairwise feature synergy using mutual information
+    and permutation testing. Targets can be retrieved from pre-built target
+    matrices or generated from metadata.
     """
     def __init__(
         self, 
@@ -33,20 +29,16 @@ class SynergyAnalyzer:
         random_state: int = 42,
     ):
         """
-        Initialize the analyzer with feature data and target variable.
-
-        Agrs:
-            dataset : PhenotypeDataset
-                Analysis-ready dataset containing:
-                - HPO feature data
-                - target matrices
-                - sample metadata
-            n_permutations(int): (default: 100)
-                Number of permutations for calculating p-values.
-            min_individuals_for_synergy_caculation(int): (default: 40)
-                Minimum number of samples required to calculate synergy.
-            random_state(int): (default: 42)
-                Seed for reproducible results.
+        Parameters
+        ----------
+        dataset : PhenotypeDataset
+            Analysis-ready dataset containing HPO features, targets, and metadata.
+        n_permutations : int, default=100
+            Number of permutations used to estimate p-values.
+        min_individuals_for_synergy_calculation : int, default=40
+            Minimum number of valid individuals required to evaluate a feature pair.
+        random_state : int, default=42
+            Random seed for reproducible permutation testing.
 
         Examples:
             >>> analyzer = PairwiseSynergyAnalyzer(
@@ -55,47 +47,30 @@ class SynergyAnalyzer:
             ...     min_individuals_for_synergy_caculation=40,
             ...     random_state
             ... )
-
-        Raises:
-            ValueError:
-                - If hpo_matrix is not a 2D array.
-                - If target's length does not match hpo_matrix's row count.
-                - If hpo_matrix contains values other than 0, 1, or NaN.
-                - If mask has an incompatible shape.
-                - If min_individuals_for_synergy_calculation is less than 40.
         """
         if not isinstance(dataset, PhenotypeDataset):
             raise TypeError("dataset must be an instance of PhenotypeDataset.")
+        
         self.dataset = dataset
-
-        # -------------------------
-        # HPO matrix
-        # -------------------------
         hpo_df =self.dataset.hpo_data.matrix
         self.X = hpo_df.to_numpy(copy=True)
         self.hpo_terms = hpo_df.columns
         self.n_features = hpo_df.shape[1]
-        self.patient_ids = hpo_df.index
+        self.individual_ids = hpo_df.index
     
         self.label_mapping = self.dataset.hpo_data.label_mapping
         self.n_permutations = n_permutations
         self.rng = np.random.default_rng(random_state)
 
-        # Relationship mask (ontology-aware filtering)
-        relationship_mask = self.dataset.hpo_data.relationship_mask
-        if relationship_mask is not None:
-            self.relationship_mask = relationship_mask.to_numpy(copy=True)
+        relationship_mask_df = self.dataset.hpo_data.relationship_mask
+        if relationship_mask_df is not None:
+            self.relationship_mask = relationship_mask_df.to_numpy(copy=True)
         else:
             logger.warning("No relationship_mask provided. All feature pairs will be evaluated for synergy.")
             self.relationship_mask = np.zeros((self.n_features, self.n_features))
+            np.fill_diagonal(self.relationship_mask, np.nan)
 
         self.min_individuals_for_synergy_calculation = min_individuals_for_synergy_calculation
-        if self.min_individuals_for_synergy_calculation < 30:
-                logger.warning(
-                    f"min_individuals_for_synergy_calculation is set to {self.min_individuals_for_synergy_calculation}, "
-                    f"which is below the recommended threshold of 30. "
-                    f"This may lead to unstable or less reliable synergy estimates."
-                )
 
     @staticmethod
     def _encode_joint_binary_index( 
@@ -103,54 +78,44 @@ class SynergyAnalyzer:
         xj:np.ndarray
     ) -> np.ndarray:
         """
-        Encodes two binary features into a unique integer index via bitwise operations.
+        Encode two binary features into a joint integer representation.
 
-        Args:
-        xi(ndarray): 
-            Feature i's values (int type, 0/1, no NaN).
-        xj(ndarray): 
-            Feature j's values (int type, 0/1, no NaN).
+        Parameters
+        ----------
+        xi : np.ndarray
+            Binary values for the first feature.
+        xj : np.ndarray
+            Binary values for the second feature.
 
-        Returns:
-            ndarray:
-            Combined index calculated as: 
-            \( \text{joint\_index} = 2 \times \text{xi} + \text{xj} \)
-            Possible values: 0 (0b00), 1 (0b01), 2 (0b10), 3 (0b11).
-
-        Example:
-        >>> xi = np.array([0, 1, 0, 1], dtype=int)
-        >>> xj = np.array([0, 0, 1, 1], dtype=int)
-        >>> _encode_joint_binary_index(xi, xj)
-        array([0, 2, 1, 3])  # Corresponding to 0b00, 0b10, 0b01, 0b11
+        Returns
+        -------
+        np.ndarray
+            Joint encoding with values in ``{0, 1, 2, 3}``.
         """
         return (xi.astype(int) << 1) | xj.astype(int)
 
     def evaluate_pair_synergy(
         self, 
         i:int,
-        j:int
+        j:int,
+        include_pmids: bool = True
     ) -> tuple[int, int, float, float, dict]: 
         """
-        Compute synergy and permutation-based p-value for feature pair (i, j).
+        Compute synergy and a permutation-based p-value for one feature pair.
 
-        Synergy is calculated as:
-            synergy = I(X_i, X_j; Y) - [I(X_i; Y) + I(X_j; Y)]
-
-        where I(a; b) denotes the mutual information (in bits) between a and b.
-
-        Args:
-        i (int): 
+        Parameters
+        ----------
+        i : int
             Index of the first feature.
-        j (int): 
+        j : int
             Index of the second feature.
+        include_pmids : bool, default=True
+            If ``True``, aggregate PMIDs from contributing individuals.
 
-        Returns:
-            Tuple[int, int, float, float, dict]:
-                - i (int): Index of the first feature.
-                - j (int): Index of the second feature.
-                - corrected_synergy (float): Corrected synergy score.
-                - p_value (float): Empirical p-value from permutation test.
-                - counts (dict): Contingency table counts.
+        Returns
+        -------
+        tuple[int, int, float, float, dict]
+            Feature indices, corrected synergy, p-value, and count summary.
         """
         mask = (~np.isnan(self.X[:, i]) & ~np.isnan(self.X[:, j]) & ~np.isnan(self.y))
         xi = self.X[mask, i]
@@ -158,23 +123,44 @@ class SynergyAnalyzer:
         y = self.y[mask]
         total = len(xi)
 
-        if np.all(xi == xi[0]) or np.all(xj == xj[0]) or np.all(y == y[0]):
-            return i, j, np.nan, np.nan, {}
-        if np.array_equal(xi, xj):
-            return i, j, np.nan, np.nan, {}
+        empty_counts = {
+            "00|y=0": 0,
+            "01|y=0": 0,
+            "10|y=0": 0,
+            "11|y=0": 0,
+            "N_y0": 0,
+            "00|y=1": 0,
+            "01|y=1": 0,
+            "10|y=1": 0,
+            "11|y=1": 0,
+            "N_y1": 0,
+            "N": 0,
+            "n_pmid": np.nan,
+            "pmids": [],
+        }
 
-        patient_ids = self.patient_ids[mask]
-        pmids_list = self.dataset.get_pmids(patient_ids).to_numpy()
-        all_pmids = sorted(
-            {
-                str(pmid)
-                for pmids in pmids_list
-                if pmids is not None
-                for pmid in pmids
-                if pd.notna(pmid)
-            }
+        if np.all(xi == xi[0]) or np.all(xj == xj[0]) or np.all(y == y[0]):
+            return i, j, np.nan, np.nan, empty_counts
+        
+        if np.array_equal(xi, xj):
+            return i, j, np.nan, np.nan, empty_counts
+
+        if include_pmids:
+            individual_ids = self.individual_ids[mask]
+            pmids_list = self.dataset.get_pmids(individual_ids).to_numpy()
+            all_pmids = sorted(
+                {
+                    str(pmid)
+                    for pmids in pmids_list
+                    if pmids is not None
+                    for pmid in pmids
+                    if pd.notna(pmid)
+                }
             )
-        n_pmids = len(all_pmids)
+            n_pmids = len(all_pmids)
+        else:
+            all_pmids = []
+            n_pmids = np.nan
         
         counts = {
         # y=0 
@@ -201,10 +187,8 @@ class SynergyAnalyzer:
 
         joint_index = self._encode_joint_binary_index(xi, xj)
         mi_ij = mutual_info_score(joint_index, y) / np.log(2)
-
         observed_synergy = mi_ij - (mi_i + mi_j)
 
-        # Permutation testing for p-value calculation
         perm_synergies = np.zeros(self.n_permutations)
         for k in range(self.n_permutations):
             y_perm = self.rng.permutation(y)  # Shuffle the target values
@@ -213,10 +197,7 @@ class SynergyAnalyzer:
             mi_ij_perm = mutual_info_score(joint_index, y_perm) / np.log(2)
             perm_synergies[k] = mi_ij_perm - (mi_i_perm + mi_j_perm)
 
-        # Calculate p-value as the proportion of permuted synergies greater than or equal to the observed synergy
         p_value = (np.sum(np.abs(perm_synergies) >= np.abs(observed_synergy)) + 1) / (self.n_permutations + 1)
-        
-        # Correct the observed synergy by subtracting the mean of the permuted synergies
         corrected_synergy = observed_synergy - perm_synergies.mean()
 
         return i, j, corrected_synergy, p_value, counts
@@ -228,60 +209,30 @@ class SynergyAnalyzer:
         target_name: str | None = None,
         positive_class=None,
         n_jobs=-1,
+        include_pmids: bool = True
     ) -> pd.DataFrame:
         """
-        Compute the pairwise synergy scores and permutation-based p-values for all valid feature pairs.
+        Compute pairwise synergy scores for all valid HPO term pairs.
 
-        The synergy score is evaluated for each pair of HPO terms/features that:
-        - Have at least `self.min_individuals_for_synergy_caculation` valid samples.
-        - Are not masked out in the existing `self.synergy_matrix` (i.e., not NaN).
+        Parameters
+        ----------
+        target_type : str
+            Target type to analyze.
+        target_name : str | None, optional
+            Target column name for built target matrices.
+        positive_class : str | None, optional
+            Positive class for metadata-derived targets.
+        n_jobs : int, default=-1
+            Number of parallel jobs. ``-1`` uses all available CPUs.
+        include_pmids : bool, default=True
+            If ``True``, aggregate PMIDs from contributing individuals and
+            include them in the result table.
 
-        Results are stored in two symmetric matrices (`self.synergy_matrix`, `self.pvalue_matrix`)
-        and an exported long-format table (`self.synergy_results`).
+        Returns
+        -------
+        pd.DataFrame
+            Long-format table of pairwise synergy results.
 
-        Args:
-            target_type : str
-                Type of target to analyze against. Supported values include:
-                - "disease"
-                - "variant_condition"
-                - metadata column names such as "sex" or "cohort"
-            target_name : str | None, optional
-                Column name for pre-built target matrices.
-                Required when `target_type` is:
-                - "disease"
-                - "variant_condition"
-            positive_class : optional
-                Required when `target_type` refers to a metadata column.
-                A binary target will be constructed as:
-                - 1 where sample_metadata[target_type] == positive_class
-                - 0 otherwise
-            n_jobs (int, optional): (default: -1)
-                Number of parallel jobs to run. 
-                Set to -1 to use all available CPU cores.
-
-        Returns:
-            pd.DataFrame:
-                DataFrame with one row per valid feature pair.
-                Each row contains:
-                    - HPO_A (str): Name of the first HPO term or feature.
-                    - HPO_B (str): Name of the second HPO term or feature.
-                    - synergy (float): Synergy score between the two features.
-                    - p_value (float): Permutation-based p-value for the synergy.
-                    - p_value_corrected (float): P-value adjusted for multiple testing using the Benjamini–Hochberg FDR method.
-                    - Count_00_y0 (int): Number of samples with (0,0) for this pair under label y=0.
-                    - Count_01_y0 (int): Number of samples with (0,1) for this pair under label y=0.
-                    - Count_10_y0 (int): Number of samples with (1,0) for this pair under label y=0.
-                    - Count_11_y0 (int): Number of samples with (1,1) for this pair under label y=0.
-                    - N_y0 (int): Total number of valid samples under label y=0.
-                    - Count_00_y1 (int): Number of samples with (0,0) for this pair under label y=1.
-                    - Count_01_y1 (int): Number of samples with (0,1) for this pair under label y=1.
-                    - Count_10_y1 (int): Number of samples with (1,0) for this pair under label y=1.
-                    - Count_11_y1 (int): Number of samples with (1,1) for this pair under label y=1.
-                    - N_y1 (int): Total number of valid samples under label y=1.
-                    - n_patients (int): Total number of patients contributing to this pair (N_y0 + N_y1).
-                    - n_pmids (int): Number of associated PubMed IDs for this feature pair.
-                    - pmids(list): List of unique PubMed IDs (PMIDs) supporting the pair, aggregated from the contributing individuals. Empty if no references are available.
-        
         Examples:
             >>> analyzer = PairwiseSynergyAnalyzer(
             ...     dataset=dataset,
@@ -306,36 +257,58 @@ class SynergyAnalyzer:
         )
         self.y = target.to_numpy(copy=True)
         
-        valid_target = self.y[~np.isnan(self.y)]
-        if not np.all(np.isin(valid_target,[1,0])):
-            raise ValueError("Target must contain only 0, 1, or NaN")
+        has_y_one = np.any(self.y == 1)
+        has_y_zero = np.any(self.y == 0)
 
-        # --- Step 1: Compute valid sample mask ---
+        if not has_y_one or not has_y_zero:
+            raise ValueError(
+                "Target lacks sufficient variation for synergy analysis.\n"
+                f"Detected values: "
+                f"{'1 present, ' if has_y_one else 'no 1, '}"
+                f"{'0 present' if has_y_zero else 'no 0'}.\n"
+                "At least one positive (1) and one negative (0) target value are required."
+            )
+
+        has_x_one = np.any(self.X == 1)
+        has_x_zero = np.any(self.X == 0)
+
+        if not has_x_one or not has_x_zero:
+            raise ValueError(
+                "HPO matrix lacks sufficient variation for synergy analysis.\n"
+                f"Detected values: "
+                f"{'1 present, ' if has_x_one else 'no 1, '}"
+                f"{'0 present' if has_x_zero else 'no 0'}.\n"
+                "At least one observed (1) and one excluded (0) value are required.\n"
+                "Please check your preprocessing (e.g., missing exclusion annotations)."
+            )
+
         mask_X = ~np.isnan(self.X)  # X valid
         mask_y = ~np.isnan(self.y)  # y valid
         mask_combined = mask_X & mask_y[:, None]  # shape (n_samples, n_features)
 
-        # Compute valid counts for each pair (like correlation)
         valid_counts = mask_combined.T.astype(int) @ mask_combined.astype(int)
         valid_counts_sparse = triu(coo_matrix(valid_counts), k=1)
         rows, cols, counts = valid_counts_sparse.row, valid_counts_sparse.col, valid_counts_sparse.data
 
-        # --- Step 2: Apply relationship mask ---
         ontology_values = self.relationship_mask[rows, cols]
         ontology_candidate = ~np.isnan(ontology_values)
 
-        # --- Step 3: Filter pairs ---
         candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_synergy_calculation))[0]
         rows_cand, cols_cand = rows[candidate_idx], cols[candidate_idx]
         pairs = list(zip(rows_cand, cols_cand))
 
         if len(pairs) == 0:
-            logger.warning("Warning: No valid pairs to calculate synergy after filtering.")
-            return pd.DataFrame()
+            logger.warning(
+                "No valid HPO term pairs remain after pre-filtering for synergy analysis.\n"
+                "This occurs before pairwise computation and usually indicates that no feature pairs\n"
+                "passed the initial candidate selection.\n\n"
+                "Possible reasons:\n"
+                f"- too few valid individuals per pair (min required = {self.min_individuals_for_synergy_calculation})\n"
+                "- ontology relationship masking removed most pairs (ancestor/descendant/self)\n"
+            )
 
-        # --- Step 4: Parallel computation ---
         results = Parallel(n_jobs=n_jobs)(
-            delayed(self.evaluate_pair_synergy)(i, j) for i, j in tqdm(pairs, desc="Calculating pairwise synergy")
+            delayed(self.evaluate_pair_synergy)(i, j, include_pmids=include_pmids) for i, j in tqdm(pairs, desc="Calculating pairwise synergy")
         )
         synergy_matrix = np.full((self.n_features, self.n_features), np.nan)
         pvalue_matrix = np.full((self.n_features, self.n_features), np.nan)
@@ -344,14 +317,14 @@ class SynergyAnalyzer:
         for i, j, synergy, pval, counts in results:
             synergy_matrix[i, j] = synergy_matrix[j, i] = synergy
             pvalue_matrix[i, j] = pvalue_matrix[j, i] = pval
-            f1, f2 = self.hpo_terms[i], self.hpo_terms[j]
+            hpo_a, hpo_b = self.hpo_terms[i], self.hpo_terms[j]
             if j > i:  # only upper triangle
                 if not np.isnan(synergy):
-                    rows.append({
-                        "HPO_A": f1,
-                        **({"HPO_A_label": self.label_mapping.get(f1)} if self.label_mapping.get(f1) else {}),
-                        "HPO_B": f2,
-                        **({"HPO_B_label": self.label_mapping.get(f2)} if self.label_mapping.get(f2) else {}),
+                    row_data = {
+                        "HPO_A": hpo_a,
+                        **({"HPO_A_label": self.label_mapping.get(hpo_a)} if self.label_mapping.get(hpo_a) else {}),
+                        "HPO_B": hpo_b,
+                        **({"HPO_B_label": self.label_mapping.get(hpo_b)} if self.label_mapping.get(hpo_b) else {}),
                         "synergy": synergy,
                         "p_value": pval,
                         "Count_00_y0": counts["00|y=0"],
@@ -364,15 +337,25 @@ class SynergyAnalyzer:
                         "Count_10_y1": counts["10|y=1"],
                         "Count_11_y1": counts["11|y=1"],
                         "N_y1": counts["N_y1"],
-                        "n_patients": counts["N"],
-                        "n_pmids": counts["n_pmid"],
-                        "pmids": ";".join(counts.get("pmids", [])),
-                    })
+                        "n_individuals": counts["N"],
+                    }
+                    if include_pmids:
+                        row_data["n_pmids"] = counts["n_pmid"]
+                        row_data["pmids"] = ";".join(counts.get("pmids", []))
+
+                    rows.append(row_data)
 
         valid_mask = ~((np.isnan(synergy_matrix).all(axis=0)) | (np.nan_to_num(synergy_matrix, nan=0).sum(axis=0) == 0))
         valid_hpo_terms = self.hpo_terms[valid_mask]
         if len(valid_hpo_terms) == 0:
-            logger.warning("Warning: No valid synergy between HPO terms. Synergy matrix will be empty.")
+            logger.warning(
+                "No valid synergy values were found between HPO terms. "
+                "The synergy matrix will be empty.\n"
+                "Possible reasons include:\n"
+                "- some HPO term pairs have no variation after masking (only one observed state)\n"
+                "- the target has no variation within valid samples for many pairs\n"
+                "- paired HPO terms are identical after masking\n"
+            )
 
         self.synergy_matrix = pd.DataFrame(
             synergy_matrix[np.ix_(valid_mask, valid_mask)],
@@ -407,36 +390,20 @@ class SynergyAnalyzer:
         output_file: str = "synergy_results.csv"
     ) -> None:
         """
-        Export synergy scores and p-values to a file (CSV or Excel).
+        Save synergy results to a CSV or Excel file.
 
-        The synergy results (`self.synergy_matrix` and `self.pvalue_matrix`) 
-        must be computed first by calling `compute_synergy_matrix`. 
-        Only the upper triangle of the symmetric matrices is exported to avoid duplication.
-
-        Args:
-            output_file (str):
-                Path to the output file. Supported formats:
-                - ".csv": saves as a CSV file.
-                - ".xlsx": saves as an Excel file.
-            synergy_threshold (float): (default: 0.0)
-                Synergy threshold must be positive. Only pairs with synergy >= synergy_threshold will be included.
-            adj_pval_threshold (float): (default: 0.0)
-                Significance threshold for corrected p-values. adj_pval_threshold must be between 0.0 and 1.0. Only pairs with corrected p-value < adj_pval_threshold will be included.
-
-        Raises:
-            ValueError:
-                - If synergy results are not computed yet.
-                - If file extension is not supported.
-            OSError:
-                If the output path is invalid or not writable. 
-
-        Example:
-            >>> analyzer.compute_synergy_matrix()
-            >>> analyzer.save_synergy_results("synergy_results.csv")
-            >>> analyzer.save_synergy_results("synergy_results.xlsx")
+        Parameters
+        ----------
+        synergy_threshold : float, default=0.0
+            Minimum synergy value to retain.
+        adj_pval_threshold : float, default=1.0
+            Maximum adjusted p-value to retain.
+        output_file : str, default="synergy_results.csv"
+            Output file path. Supported formats are ``.csv`` and ``.xlsx``.
         """
         if not hasattr(self, "synergy_results"):
             raise ValueError("Synergy results not computed. Run compute_synergy_matrix() first.")
+        
         if self.synergy_results.empty:
             logger.warning("Warning: Synergy results are empty. No file will be saved.")
             return
@@ -448,15 +415,13 @@ class SynergyAnalyzer:
 
         if adj_pval_threshold < 0.0 or adj_pval_threshold > 1.0:
             raise ValueError("adj_pval_threshold must be between 0.0 and 1.0.")
-        
         df = df[df["p_value_corrected"] < adj_pval_threshold]
 
         ext = os.path.splitext(output_file)[1].lower()
         if ext not in [".csv", ".xlsx"]:
             raise ValueError(f"Unsupported file format: {ext}. Use '.csv' or '.xlsx'.")
-
         
-        if output_file.endswith(".csv"):
+        if ext == ".csv":
             df.to_csv(output_file, index=False)
         else:
             df.to_excel(output_file, index=False)
@@ -468,18 +433,19 @@ class SynergyAnalyzer:
         adj_pval_threshold: float = 0.1
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Filter out feature pairs with weak synergy based on given threshold.
+        Filter the synergy and p-value matrices by effect size and significance.
 
-        Args:
-            synergy_threshold (float): (default: 0.08)
-                The minimum synergy value to be saves. Synergy threshold must be non-negative. Pairs with synergy < synergy_threshold will be set to NaN.
-            adj_pval_threshold (float): (default: 0.1)
-                Significance threshold for corrected p-value and must be between 0.0 and 1.0. Only pairs with corrected p-value < adj_pval_threshold will be retained.
+        Parameters
+        ----------
+        synergy_threshold : float, default=0.08
+            Minimum synergy value to retain.
+        adj_pval_threshold : float, default=0.1
+            Maximum adjusted p-value to retain.
 
-        Returns:
-            Tuple[pd.DataFrame, pd.DataFrame]: 
-                - Synergy score matrix with weak synergy pairs removed (set as NaN).
-                - Corresponding p-value matrix with the same filtering applied.
+        Returns
+        -------
+        tuple[pd.DataFrame, pd.DataFrame]
+            Filtered synergy matrix and filtered p-value matrix.
         """
         if not hasattr(self, 'pvalue_matrix'):
             raise RuntimeError("Synergy matrix not found. Please run `compute_synergy_matrix()` first.")
@@ -489,7 +455,6 @@ class SynergyAnalyzer:
             logger.warning("Warning: Synergy results are empty.")
             return 
 
-        # Mask weak synergy values
         if synergy_threshold < 0.0:
             raise ValueError("synergy_threshold must be non-negative.")
         mask = synergy_matrix < synergy_threshold
@@ -503,12 +468,12 @@ class SynergyAnalyzer:
         (self.synergy_results["p_value_corrected"] >= adj_pval_threshold), ["HPO_A", "HPO_B"]
         ]
         for _, row in non_signif.iterrows():
-            hpo1, hpo2 = row["HPO_A"], row["HPO_B"]
-            if hpo1 in synergy_matrix.index and hpo2 in synergy_matrix.columns:
-                synergy_matrix.loc[hpo1, hpo2] = np.nan
-                synergy_matrix.loc[hpo2, hpo1] = np.nan
-                p_value.loc[hpo1, hpo2] = np.nan
-                p_value.loc[hpo2, hpo1] = np.nan
+            hpo_a, hpo_b = row["HPO_A"], row["HPO_B"]
+            if hpo_a in synergy_matrix.index and hpo_b in synergy_matrix.columns:
+                synergy_matrix.loc[hpo_a, hpo_b] = np.nan
+                synergy_matrix.loc[hpo_b, hpo_a] = np.nan
+                p_value.loc[hpo_a, hpo_b] = np.nan
+                p_value.loc[hpo_b, hpo_a] = np.nan
 
         # Remove rows/columns that are completely NaN
         mask_rows = synergy_matrix.isna().all(axis=1)
@@ -523,7 +488,7 @@ class SynergyAnalyzer:
         hpo_id: str, 
         label: str | None
     ) -> str:
-        """Format HPO for display."""
+        """Format an HPO term for display."""
         if label:
             return f"{label} ({hpo_id})"
         return hpo_id
@@ -533,6 +498,7 @@ class SynergyAnalyzer:
         pmids: str | list[str] | None,
         max_pmids: int = 5,
     ) -> str:
+        """Format PMID values for hover text."""
         if pmids is None or pmids == "":
             return "None"
 
@@ -558,42 +524,38 @@ class SynergyAnalyzer:
             target_name: str = "",
         ) -> go.Figure:
         """
-        Generate a Plotly heatmap figure of pairwise synergy scores for HPO features.
+        Plot a heatmap of pairwise synergy values.
 
-        This function computes a heatmap of synergy scores, annotates significant pairs,
-        and prepares hover text with correlation and p-values.
+        Parameters
+        ----------
+        synergy_threshold : float, default=0.08
+            Minimum synergy value to display.
+        adj_pval_threshold : float, default=0.1
+            Maximum adjusted p-value to display.
+        target_name : str, optional
+            Target name shown in the plot title.
 
-        Args:
-            synergy_threshold (float): (default: 0.08)
-                Minimum synergy value to include in the heatmap.synergy_threshold must be non-negative. Pairs with synergy <= synergy_threshold will be set to NaN and not displayed.
-            adj_pval_threshold (float): (default: 0.1)
-                Significance threshold for corrected p-value. adj_pval_threshold must be between 0.0 and 1.0. Only pairs with corrected p-value < adj_pval_threshold will be annotated as significant.
-            target_name (str, optional): 
-                Name of the target variable for the plot title.                                 
-
-        Returns:
-            go.Figure: A Plotly heatmap figure object ready for display or saving.
-
-        Raises:
-            ValueError: If no sufficient synergy pairs exist after filtering.
-
-        Example:
-            >>> fig = analyzer.create_synergy_heatmap(lower_bound=0.2, target_name="Disease Status")
-            >>> fig.show()
+        Returns
+        -------
+        go.Figure
+            Plotly heatmap figure.
         """
-
         synergy_matrix, pvalue_matrix = self.filter_weak_synergy(synergy_threshold=synergy_threshold, adj_pval_threshold=adj_pval_threshold)
 
         if synergy_matrix.empty or np.isnan(synergy_matrix.values).all():
-            raise ValueError("No sufficient synergy pairs to plot. Try adjusting the synergy_threshold parameter.")
+            raise ValueError(
+                "No sufficient synergy pairs remain after filtering. "
+                "Try adjusting `synergy_threshold` or `adj_pval_threshold`."
+            )
         
         raw_synergy_matrix_df = self.synergy_matrix.loc[synergy_matrix.index, synergy_matrix.columns]
-
         relationship_mask_df = pd.DataFrame(
             self.relationship_mask,
             index=self.hpo_terms,
-            columns=self.hpo_terms
-        ).loc[synergy_matrix.index, synergy_matrix.columns]
+            columns=self.hpo_terms,
+        )
+
+        relationship_mask_df = relationship_mask_df.loc[synergy_matrix.index, synergy_matrix.columns]
 
         status_matrix = pd.DataFrame(
             "hidden_upper_triangle",
@@ -604,13 +566,8 @@ class SynergyAnalyzer:
         relationship_isna = relationship_mask_df.isna()
         relationship_notna = ~relationship_isna
 
-        # ontology related
         status_matrix[relationship_isna] = "ontology_related"
-
-        # invalid computation
         status_matrix[raw_synergy_matrix_df.isna() & relationship_notna] = "invalid_computation"
-
-        # filtered by statistics
         status_matrix[raw_synergy_matrix_df.notna() & synergy_matrix.isna()] = "filtered_by_statistics"
 
         n_rows, n_cols = synergy_matrix.shape
@@ -623,7 +580,6 @@ class SynergyAnalyzer:
         label_fontsize = max(8, 12 - max_dim // 8)
         annot_fontsize = max(6, 12 - max_dim // 8)
 
-        # --- Prepare matrix and annotations ---
         triangle_mask = pd.DataFrame(
             np.tril(np.ones(synergy_matrix.shape, dtype=bool), k=0),
             index=synergy_matrix.index,
@@ -641,49 +597,52 @@ class SynergyAnalyzer:
             synergy_matrix.round(2).astype(str)
         )
 
-        # --- Generate custom hover text per cell ---
-        hover_text = np.empty_like(synergy_matrix, dtype=object)
         counts_lookup = {}
         for row in self.synergy_results.itertuples():
-            # forward (original counts)
-            counts_lookup[(row.HPO_A, row.HPO_B)] = {
-            "Synergy": row.synergy,
-            "P_value": row.p_value,
-            "P_value_corrected": row.p_value_corrected,  
-            "Count_00|y=0": row.Count_00_y0,
-            "Count_01|y=0": row.Count_01_y0,
-            "Count_10|y=0": row.Count_10_y0,
-            "Count_11|y=0": row.Count_11_y0,
-            "N_y0": row.N_y0,
-            "Count_00|y=1": row.Count_00_y1,
-            "Count_01|y=1": row.Count_01_y1,
-            "Count_10|y=1": row.Count_10_y1,
-            "Count_11|y=1": row.Count_11_y1,
-            "N_y1": row.N_y1,
-            "n_patients": row.n_patients,
-            "n_pmids": row.n_pmids,
-            "pmids": getattr(row, "pmids", ""),
+            has_pmids = hasattr(row, "n_pmids")
+            forward = {
+                "Synergy": row.synergy,
+                "P_value": row.p_value,
+                "P_value_corrected": row.p_value_corrected,
+                "Count_00|y=0": row.Count_00_y0,
+                "Count_01|y=0": row.Count_01_y0,
+                "Count_10|y=0": row.Count_10_y0,
+                "Count_11|y=0": row.Count_11_y0,
+                "N_y0": row.N_y0,
+                "Count_00|y=1": row.Count_00_y1,
+                "Count_01|y=1": row.Count_01_y1,
+                "Count_10|y=1": row.Count_10_y1,
+                "Count_11|y=1": row.Count_11_y1,
+                "N_y1": row.N_y1,
+                "n_individuals": row.n_individuals,
             }
-        
-            # backward (swap 01 和 10)
-            counts_lookup[(row.HPO_B, row.HPO_A)] = {
-            "Synergy": row.synergy,
-            "P_value": row.p_value,
-            "P_value_corrected": row.p_value_corrected, 
-            "Count_00|y=0": row.Count_00_y0,
-            "Count_01|y=0": row.Count_10_y0,  # swap 01 和 10
-            "Count_10|y=0": row.Count_01_y0,  # swap 01 和 10
-            "Count_11|y=0": row.Count_11_y0,
-            "N_y0": row.N_y0,
-            "Count_00|y=1": row.Count_00_y1,
-            "Count_01|y=1": row.Count_10_y1,  # swap 01 和 10
-            "Count_10|y=1": row.Count_01_y1,  # swap 01 和 10
-            "Count_11|y=1": row.Count_11_y1,
-            "N_y1": row.N_y1,
-            "n_patients": row.n_patients,
-            "n_pmids": row.n_pmids,
-            "pmids": getattr(row, "pmids", ""),
+
+            backward = {
+                "Synergy": row.synergy,
+                "P_value": row.p_value,
+                "P_value_corrected": row.p_value_corrected,
+                "Count_00|y=0": row.Count_00_y0,
+                "Count_01|y=0": row.Count_10_y0,
+                "Count_10|y=0": row.Count_01_y0,
+                "Count_11|y=0": row.Count_11_y0,
+                "N_y0": row.N_y0,
+                "Count_00|y=1": row.Count_00_y1,
+                "Count_01|y=1": row.Count_10_y1,
+                "Count_10|y=1": row.Count_01_y1,
+                "Count_11|y=1": row.Count_11_y1,
+                "N_y1": row.N_y1,
+                "n_individuals": row.n_individuals,
             }
+
+            if has_pmids:
+                forward["n_pmids"] = row.n_pmids
+                forward["pmids"] = getattr(row, "pmids", "")
+                backward["n_pmids"] = row.n_pmids
+                backward["pmids"] = getattr(row, "pmids", "")
+
+            counts_lookup[(row.HPO_A, row.HPO_B)] = forward
+            counts_lookup[(row.HPO_B, row.HPO_A)] = backward
+
         
         hover_text = []
         for i, row in enumerate(pvalue_matrix.index):
@@ -701,16 +660,13 @@ class SynergyAnalyzer:
                     status = status_matrix.iloc[i, j]
                     reason_map = {
                         "ontology_related": "these two HPO terms are ontologically related (ancestor/descendant/self).",
-                        "invalid_computation": "the correlation could not be computed for this HPO pair.",
+                        "invalid_computation": "the synergy could not be computed for this HPO pair.",
                         "filtered_by_statistics": (
                             f"the synergy value did not pass the statistical filters "
                             f"(|corr| >= {synergy_threshold} and adjusted p-value < {adj_pval_threshold})."
                         ),
-                        "hidden_upper_triangle": "only the lower-left triangle is displayed.",
                     }
-
                     reason_text = reason_map.get(status, f"{status}")
-
                     hover_row.append(
                         f"<b>HPO_A</b>: {display_col}<br>"
                         f"<b>HPO_B</b>: {display_row}<br>"
@@ -719,10 +675,16 @@ class SynergyAnalyzer:
 
                 else:
                     counts = counts_lookup.get((row, col), {})
-                    pmid_text = self._format_pmids_for_tooltip(
-                        counts.get("pmids", ""),
-                        max_pmids=4,
-                    )
+                    has_pmids = "n_pmids" in counts
+                    if not has_pmids:
+                        pmid_block = ""
+                    else:
+                        pmids_raw = counts.get("pmids", "")
+                        pmid_text = self._format_pmids_for_tooltip(pmids_raw, max_pmids=4)
+                        pmid_block = (
+                            f"<b>N_PMIDs</b>: {int(counts.get('n_pmids', 0))}<br>"
+                            f"<b>PMIDs</b>: {pmid_text}"
+                        )
                     hover_row.append(
                         f"<b>HPO_A</b>: {display_col}<br><b>HPO_B</b>: {display_row}<br>"
                         f"<b>Synergy</b>: {synergy:.2f}<br><b>p-val</b>: {pval:.6f}<br>"
@@ -732,16 +694,15 @@ class SynergyAnalyzer:
                         f"E/O: {counts.get('Count_01|y=0', 0)}, "
                         f"O/E: {counts.get('Count_10|y=0', 0)}, "
                         f"O/O: {counts.get('Count_11|y=0', 0)} "
-                        f"(<i>N={counts.get('N_y0', 0)}</i>)<br>"
+                        f" (<i>N={counts.get('N_y0', 0)}</i>)<br>"
                         f"<b>Counts (y=1)</b><br>"
                         f"&nbsp;&nbsp;E/E: {counts.get('Count_00|y=1', 0)}, "
                         f"E/O: {counts.get('Count_01|y=1', 0)}, "
                         f"O/E: {counts.get('Count_10|y=1', 0)}, "
                         f"O/O: {counts.get('Count_11|y=1', 0)} "
-                        f"(<i>N={counts.get('N_y1', 0)}</i>)<br>"
-                        f"<b>Total individuals</b>: {counts.get('n_patients', 0)}<br>"
-                        f"<b>N_PMIDs</b>: {counts.get('n_pmids', 0)}<br>"
-                        f"<b>PMIDs</b>: {pmid_text}"
+                        f" (<i>N={counts.get('N_y1', 0)}</i>)<br>"
+                        f"<b>Total_individuals</b>: {counts.get('n_individuals', 0)}<br>"
+                        f"{pmid_block}"
                     )
             hover_text.append(hover_row)
        
@@ -759,7 +720,7 @@ class SynergyAnalyzer:
             ygap=1,
         ))
         colorscale = [
-            [0.0, "#eef6f5"],   # very light, almost white teal
+            [0.0, "#eef6f5"],   
             [0.25, "#c6e2df"],
             [0.5, "#8fbfba"],
             [0.75, "#4f8f8a"],
@@ -783,7 +744,6 @@ class SynergyAnalyzer:
                 )
             )
 
-        # --- Adjust layout ---
         max_ylabel_len = max(len(str(lbl)) for lbl in synergy_matrix.index)
         left_margin = 60 + max_ylabel_len * label_fontsize
 
@@ -822,21 +782,14 @@ class SynergyAnalyzer:
         output_file: str
     ) -> None:
         """
-        Save a pairwise synergy heatmap figure to an HTML file.
+        Save a synergy heatmap as an HTML file.
 
-        Args:
-            fig (plotly.graph_objects.Figure): 
-                The heatmap figure generated by `create_synergy_heatmap` or `plot_synergy_heatmap`.
-            output_file (str): 
-                Path to the HTML file where the figure should be saved. Must end with '.html'.
-
-        Raises:
-            ValueError:
-                If the output_file extension is not '.html'.
-
-        Example:
-            >>> fig = analyzer.create_synergy_heatmap(lower_bound=0.2, target_name="Disease Status")
-            >>> analyzer.save_synergy_heatmap(fig, "synergy_heatmap.html")
+        Parameters
+        ----------
+        fig : go.Figure
+            Heatmap figure.
+        output_file : str
+            Output HTML file path.
         """
         if not output_file.endswith(".html"):
             raise ValueError("output_file must have a '.html' extension")

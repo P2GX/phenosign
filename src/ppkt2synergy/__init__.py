@@ -1,18 +1,19 @@
-from .io import load_phenopackets, EnrichedPhenopacket, load_hpo
+from .io import load_phenopackets_by_cohort, load_phenopackets_by_disease, EnrichedPhenopacket, load_hpo
 from .preprocessing import PhenotypeDatasetBuilder
-from .analysis import HPOStatisticsAnalyzer, SynergyAnalyzer,CorrelationType
+from .analysis import HPOCorrelationAnalyzer, SynergyAnalyzer,CorrelationType
 
 
 
-__version__ = "0.0.8"
+__version__ = "0.0.9"
 
 
 __all__ = [
     "load_hpo",
-    "load_phenopackets",
+    "load_phenopackets_by_cohort",
+    "load_phenopackets_by_disease",
     "EnrichedPhenopacket",
     "PhenotypeDatasetBuilder",
-    "HPOStatisticsAnalyzer",
+    "HPOCorrelationAnalyzer",
     "SynergyAnalyzer",
     "CorrelationType", 
 ]

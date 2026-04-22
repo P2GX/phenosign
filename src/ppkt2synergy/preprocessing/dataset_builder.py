@@ -2,6 +2,7 @@ import phenopackets as ppkt
 import pandas as pd
 from typing import IO
 from gpsea.model import VariantEffect
+from collections.abc import Sequence
 
 from .feature_builder import HpoFeatureBuilder
 from .target_builder import TargetDataBuilder
@@ -35,21 +36,21 @@ class PhenotypeDatasetBuilder:
     """
     def __init__(
         self,
-        phenopackets: list[ppkt.Phenopacket] | list[EnrichedPhenopacket],
+        phenopackets: Sequence[ppkt.Phenopacket] | Sequence[EnrichedPhenopacket],
         hpo_file: str | IO | None = None,
         hpo_release: str | None = None,
     ) -> None:
         """
         Parameters
         ----------
-        phenopackets : list[ppkt.Phenopacket] | list[EnrichedPhenopacket]
+        phenopackets : Sequence[ppkt.Phenopacket] | Sequence[EnrichedPhenopacket]
             Input phenopackets.
         hpo_file : str | IO | None, optional
             Local HPO file.
         hpo_release : str | None, optional
             HPO release version.
         """
-        if not phenopackets:
+        if len(phenopackets) == 0:
             raise ValueError("phenopackets cannot be empty")
 
         if all(isinstance(p, ppkt.Phenopacket) for p in phenopackets):
@@ -62,7 +63,8 @@ class PhenotypeDatasetBuilder:
 
         else:
             raise TypeError(
-                "phenopackets must be a list of Phenopacket or EnrichedPhenopacket"
+                "`phenopackets` must be a list of `Phenopacket` or "
+                "`EnrichedPhenopacket` objects."
             )
 
         self.hpo_hierarchy = HPOHierarchyEngine(
@@ -70,29 +72,26 @@ class PhenotypeDatasetBuilder:
             release=hpo_release,
         )
 
-    def build_sample_metadata(
+    def build_individual_metadata(
         self
     ) -> pd.DataFrame:
         """
-        Build sample-level metadata.
+        Build individual-level metadata.
 
-        Returns:
-            pd.DataFrame
-                Rows = patients
-                Columns may include:
-                - cohort
-                - pmids
-                - sex
-                - age
-            """
+        Returns
+        -------
+        pd.DataFrame
+            Metadata table indexed by individual identifiers. Columns may
+            include ``cohort``, ``sex``, ``age``, and ``pmids``.
+        """
         data = {}
 
-        for r in self.records:
-            data[r.patient_id] = {
-                "cohort": r.cohort,
-                "sex": r.sex,
-                "age": r.age,
-                "pmids": r.metadata.get("pmids"),
+        for record in self.records:
+            data[record.individual_id] = {
+                "cohort": record.cohort,
+                "sex": record.sex,
+                "age": record.age,
+                "pmids": record.metadata["pmids"],
             }
 
         df = pd.DataFrame.from_dict(data, orient="index")
@@ -101,37 +100,31 @@ class PhenotypeDatasetBuilder:
     def build(
         self,
         variant_effect_type: VariantEffect | None = None,
-        mane_tx_id: str | list[str] | None = None,
+        mane_tx_id: str | Sequence[str] | None = None,
         missing_threshold: float = 1.0,
     ) -> PhenotypeDataset:
         """
-        Build the final dataset containing feature matrices and label vectors.
+        Build the final phenotype dataset.
 
-        Args:
-            variant_effect_type : VariantEffect | None, optional
-                The type of variant effect to consider.
-            mane_tx_id : str | list[str] | None, optional
-                The MANE transcript ID(s) to consider.
-            missing_threshold : float, default=1.0
-                Maximum allowed proportion of missing values per HPO term.
+        Parameters
+        ----------
+        variant_effect_type : VariantEffect | None, optional
+            Variant effect type used to build the variant-condition target. 
+        mane_tx_id : str | Sequence[str] | None, optional
+            MANE transcript identifier or identifiers used to build the
+            variant-condition target.
+        missing_threshold : float, default=1.0
+            Maximum allowed proportion of missing values per HPO term.
 
-        Returns:          
-            PhenotypeDataset
-                Final dataset containing:
-                - hpo feature data
-                - target data
-                - sample metadata
-      
+        Returns
+        -------
+        PhenotypeDataset
+            Final dataset containing HPO feature data, target matrices,
+            and individual-level metadata.
         """
-        # -------------------------
-        # HPO features
-        # -------------------------
         feature_builder = HpoFeatureBuilder(records=self.records, hpo_hierarchy=self.hpo_hierarchy)
         hpo_data = feature_builder.build(missing_threshold=missing_threshold)
 
-        # -------------------------
-        # Targets
-        # -------------------------
         target_builder = TargetDataBuilder(
             records=self.records,
             raw_phenopackets=self.raw_phenopackets,
@@ -143,16 +136,10 @@ class PhenotypeDatasetBuilder:
             mane_tx_id=mane_tx_id,
         )
 
-        # -------------------------
-        # sample metadata
-        # -------------------------
-        sample_metadata = self.build_sample_metadata()
+        individual_metadata = self.build_individual_metadata()
 
-        # -------------------------
-        # Final dataset
-        # -------------------------
         return PhenotypeDataset(
             hpo_data=hpo_data,
             targets=targets,
-            sample_metadata=sample_metadata,
+            individual_metadata=individual_metadata,
         )

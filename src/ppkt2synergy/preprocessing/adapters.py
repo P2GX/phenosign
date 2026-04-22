@@ -7,89 +7,79 @@ from ..io.phenopacket_loader import EnrichedPhenopacket
 
 logger = logging.getLogger(__name__)
 
-def phenopacket_to_patient_record(
+def phenopacket_to_record(
     phenopacket: ppkt.Phenopacket,
     cohort: str | None = None,
 ) -> PhenopacketRecord:
     """
-    Convert a single Phenopacket into a PhenopacketRecord.
+    Convert a Phenopacket into a PhenopacketRecord.
 
-    Args:
-        phenopacket : ppkt.Phenopacket
-            Input phenopacket.
-        cohort : str | None, optional
-            Cohort label (if available).
+    Parameters
+    ----------
+    phenopacket : ppkt.Phenopacket
+        Input phenopacket.
+    cohort : str | None, optional
+        Cohort label associated with the phenopacket.
 
-    Returns:
-        PhenopacketRecord
-            Standardized internal representation.
+    Returns
+    -------
+    PhenopacketRecord
+        Standardized internal representation.
     """
-    patient_id = phenopacket.id
+    individual_id = phenopacket.id
 
-    # -------------------------
-    # HPO terms
-    # -------------------------
     observed_terms = set()
     excluded_terms = set()
 
-    for f in phenopacket.phenotypic_features:
-        if not f.type or not f.type.id:
+    for feature in phenopacket.phenotypic_features:
+        if not feature.type or not feature.type.id:
             continue
 
-        term_id = f.type.id
-        if getattr(f, "excluded", False):
+        term_id = feature.type.id
+        if getattr(feature, "excluded", False):
             excluded_terms.add(term_id)
         else:
             observed_terms.add(term_id)
 
-    # -------------------------
-    # Diseases
-    # -------------------------
     observed_diseases = set()
     excluded_diseases = set()
-    for d in phenopacket.diseases:
-        if not d.term or not d.term.label:
+    for disease in phenopacket.diseases:
+        if not disease.term or not disease.term.label:
             continue
-        disease_label = d.term.label
-        if getattr(d, "excluded", False):
+        disease_label = disease.term.label
+        if getattr(disease, "excluded", False):
             excluded_diseases.add(disease_label)
         else:
             observed_diseases.add(disease_label)
-            
 
-    # -------------------------
-    # Sex / Age (optional)
-    # -------------------------
     sex = None
     age = None
 
     if phenopacket.subject:
         sex_value = getattr(phenopacket.subject, "sex", None)
         sex_map = {
-            0: "unknown",
             1: "female",
             2: "male",
-            3: "other",
         }
         sex = sex_map.get(sex_value, None)
-        age = getattr(phenopacket.subject, "time_at_last_encounter", None)
-
-    # -------------------------
-    # Metadata (PMIDs etc.)
-    # -------------------------
-    metadata = {}
+        encounter = getattr(phenopacket.subject, "time_at_last_encounter", None)
+        if encounter and getattr(encounter, "age", None):
+            age_obj = encounter.age
+            age = getattr(age_obj, "iso8601duration", None)
 
     pmids = []
+
     if phenopacket.meta_data:
         for ref in phenopacket.meta_data.external_references:
             if hasattr(ref, "id") and ref.id.startswith("PMID:"):
                 pmids.append(ref.id.replace("PMID:", ""))
 
-    if pmids:
-        metadata["pmids"] = sorted(set(pmids))
+    metadata = {
+        "pmids": sorted(set(pmids))
+    }
 
     return PhenopacketRecord(
-        patient_id=patient_id,
+        individual_id=individual_id,
         cohort=cohort,
         observed_hpo_terms=observed_terms,
         excluded_hpo_terms=excluded_terms,
@@ -101,73 +91,82 @@ def phenopacket_to_patient_record(
     )
 
 
-# ================================
-# Batch Conversion
-# ================================
-
 def phenopackets_to_records(
     phenopackets: Iterable[ppkt.Phenopacket],
     cohort: str | None = None,
 ) -> list[PhenopacketRecord]:
     """
-    Convert a list of Phenopackets into PhenopacketRecords.
+    Convert phenopackets into PhenopacketRecord objects.
 
-    Args:
-        phenopackets : Iterable[Phenopacket]
-            Input phenopackets.
-        cohort : str | None
-            Cohort label to assign to all records (if available).
+    Parameters
+    ----------
+    phenopackets : Iterable[ppkt.Phenopacket]
+        Input phenopackets.
+    cohort : str | None, optional
+        Cohort label assigned to all records.
 
-    Returns:
-        List[PhenopacketRecord]
-            List of standardized internal representations.
-    -----
+    Returns
+    -------
+    list[PhenopacketRecord]
+        Converted records.
     """
     records = []
     seen_ids = set()
-    for p in phenopackets:
-        if getattr(p, "id", None) in seen_ids:
-            logger.warning("Skipping duplicate phenopacket %s", getattr(p, "id", "unknown"))
+
+    for phenopacket in phenopackets:
+        phenopacket_id = getattr(phenopacket, "id", None)
+        if not phenopacket_id:
+            raise ValueError("Phenopacket must have a non-empty `id`.")
+        if phenopacket_id in seen_ids:
+            logger.warning("Skipping duplicate phenopacket %s", phenopacket_id or "unknown")
             continue
-        seen_ids.add(getattr(p, "id", None))
+        seen_ids.add(phenopacket_id)
         
         try:
-            records.append(phenopacket_to_patient_record(p, cohort=cohort))
+            records.append(phenopacket_to_record(phenopacket, cohort=cohort))
         except Exception as e:
-            logger.warning("Skipping phenopacket %s: %s", getattr(p, "id", "unknown"), e)
+            logger.warning("Skipping phenopacket %s: %s", phenopacket_id or "unknown", e)
     return records
 
 
 def enriched_phenopackets_to_records(
-    enriched: list[EnrichedPhenopacket],
+    enriched: Iterable[EnrichedPhenopacket],
 ) -> list[PhenopacketRecord]:
     """
-    Convert EnrichedPhenopacket objects into PhenopacketRecords.
+    Convert enriched phenopackets into PhenopacketRecord objects.
 
-    Args:
-        enriched : List[EnrichedPhenopacket]
-                List of enriched phenopackets containing both the original phenopacket
-                and additional metadata (e.g., cohort information).
+    Parameters
+    ----------
+    enriched : Iterable[EnrichedPhenopacket]
+        Enriched phenopackets with cohort metadata.
 
-    Returns:
-        List[PhenopacketRecord]
-                List of standardized patient records derived from the enriched phenopackets.
+    Returns
+    -------
+    list[PhenopacketRecord]
+        Converted records.
     """
     records = []
     seen_ids = set()
+
     for item in enriched:
-        if getattr(item.phenopacket, "id", None) in seen_ids:
-            logger.warning("Skipping duplicate enriched phenopacket %s", getattr(item, "id", "unknown"))
+        phenopacket_id = item.phenopacket_id
+
+        if not phenopacket_id:
+            raise ValueError("EnrichedPhenopacket contains phenopacket without id")
+
+        if phenopacket_id in seen_ids:
+            logger.warning("Skipping duplicate enriched phenopacket %s", phenopacket_id)
             continue
-        seen_ids.add(getattr(item, "id", None))
+        seen_ids.add(phenopacket_id)
 
         try:
             records.append(
-                phenopacket_to_patient_record(
+                phenopacket_to_record(
                     item.phenopacket,
                     cohort=item.cohort,
                 )
             )
         except Exception as e:
-            logger.warning("Skipping enriched phenopacket %s: %s", item.id, e)
+            logger.warning("Skipping enriched phenopacket %s: %s", phenopacket_id, e)
+            
     return records

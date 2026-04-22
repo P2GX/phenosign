@@ -4,77 +4,109 @@ import pandas as pd
 @dataclass
 class HpoFeatureData:
     """
-    Container for patient HPO feature data used in downstream analysis.
+    Container for individual-level HPO feature data.
 
-    Attributes
+    Parameters
     ----------
     matrix : pd.DataFrame
-        Binary matrix of HPO term observations
-        (rows=patients, columns=HPO terms).
-        Values: 
-        - 1=observed
-        - 0=excluded
-        - NaN=unknown.
-
-    label_mapping : dict[str, str]
+        Binary HPO feature matrix with individuals as rows and HPO terms
+        as columns. Values must be ``1`` (observed), ``0`` (excluded),
+        or ``NaN`` (unknown).
+    label_mapping : dict[str, str], optional
         Mapping from HPO term IDs to human-readable labels.
-
     relationship_mask : pd.DataFrame | None, optional
-         Square matrix describing hierarchical relationships between HPO terms
-        (terms x terms):
-        - NaN = related (ancestor/descendant/self)
-        - 0 = unrelated
+        Square mask over HPO terms with the same index and columns as
+        ``matrix.columns``. Related term pairs are encoded as ``NaN``
+        and unrelated pairs as ``0``.
     """
     matrix: pd.DataFrame
     label_mapping: dict[str, str] = field(default_factory=dict)
     relationship_mask: pd.DataFrame | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not isinstance(self.matrix, pd.DataFrame):
-            raise TypeError("matrix must be a pandas DataFrame")
+            raise TypeError(f"`matrix` must be a pandas DataFrame, got {type(self.matrix).__name__}.")
+        
+        if self.matrix.shape[0] == 0 or self.matrix.shape[1] == 0:
+            raise ValueError("`matrix` must not be empty.")
 
         if self.matrix.columns.has_duplicates:
-            raise ValueError("matrix columns must be unique")
-
-        if self.matrix.index.has_duplicates:
-            raise ValueError("matrix index must be unique")
-        
-        # Validate matrix values: only 0, 1, NaN
-        invalid = ~self.matrix.isin([0, 1]) & self.matrix.notna()
-        if invalid.any().any():
-            bad_vals = pd.unique(self.matrix[invalid].values.ravel())
+            duplicated_columns = (
+                self.matrix.columns[self.matrix.columns.duplicated()]
+                .unique()
+                .tolist()
+            )
             raise ValueError(
-                f"matrix must contain only 0, 1, or NaN. Found: {bad_vals.tolist()}"
+                f"`matrix` columns must be unique. Duplicated columns: {duplicated_columns}."
             )
 
-        # --- relationship_mask checks ---
+        if self.matrix.index.has_duplicates:
+            duplicated_index = (
+                self.matrix.index[self.matrix.index.duplicated()]
+                .unique()
+                .tolist()
+            )
+            raise ValueError(
+                f"`matrix` index must be unique. Duplicated index values: {duplicated_index}."
+            )
+        
+        invalid = ~self.matrix.isin([0, 1]) & self.matrix.notna()
+        if invalid.any().any():
+            bad_vals = [
+                v for v in pd.unique(self.matrix[invalid].values.ravel())
+                if pd.notna(v)
+            ]
+            raise ValueError(
+                "`matrix` must contain only 0, 1, or NaN. "
+                f"Found invalid values: {bad_vals[:10]}."
+            )
+        
+
+        if not isinstance(self.label_mapping, dict):
+            raise TypeError(
+                f"`label_mapping` must be a dict[str, str], got {type(self.label_mapping).__name__}."
+            )
+
+        if not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in self.label_mapping.items()
+        ):
+            raise TypeError("`label_mapping` must map strings to strings.")
+        
+
         if self.relationship_mask is None:
             return
 
         mask = self.relationship_mask
 
         if not isinstance(mask, pd.DataFrame):
-            raise TypeError("relationship_mask must be a pandas DataFrame")
-
-        if mask.shape[0] != mask.shape[1]:
-            raise ValueError("relationship_mask must be a square matrix")
-
-        if mask.index.has_duplicates or mask.columns.has_duplicates:
-            raise ValueError("relationship_mask index/columns must be unique")
-
-        # --- index/column match ---
-        if not (mask.index.equals(self.matrix.columns) and
-                mask.columns.equals(self.matrix.columns)):
-            raise ValueError("relationship_mask must match matrix columns exactly")
-
-        # --- mask value check (0 / NaN) ---
-        invalid_mask = ~mask.isin([0]) & mask.notna()
-        if invalid_mask.any().any():
-            bad_vals = pd.unique(mask[invalid_mask].values.ravel())
-            raise ValueError(
-                f"relationship_mask must contain only 0 or NaN. Found: {bad_vals.tolist()}"
+            raise TypeError(
+                f"`relationship_mask` must be a pandas DataFrame, got {type(mask).__name__}."
             )
 
+        if not (
+            mask.index.equals(self.matrix.columns)
+            and mask.columns.equals(self.matrix.columns)
+        ):
+            raise ValueError(
+                "`relationship_mask` must have the same index and columns as "
+                "`matrix.columns`, in the same order."
+            )
+
+        invalid_mask = ~mask.isin([0]) & mask.notna()
+        if invalid_mask.any().any():
+            bad_vals = [
+                v for v in pd.unique(mask[invalid_mask].values.ravel())
+                if pd.notna(v)
+            ]
+            raise ValueError(
+                "`relationship_mask` must contain only 0 or NaN. "
+                f"Found invalid values: {bad_vals[:10]}."
+            )
+
+        if not mask.equals(mask.T):
+            raise ValueError("`relationship_mask` must be symmetric.")
+        
     @property
     def feature_names(self) -> pd.Index:
         """Return HPO feature names (matrix columns)."""
