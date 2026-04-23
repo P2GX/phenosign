@@ -1,4 +1,5 @@
-from typing import IO, Sequence
+from typing import IO
+from collections.abc import Sequence
 import logging
 
 import numpy as np

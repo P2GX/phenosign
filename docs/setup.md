@@ -1,8 +1,15 @@
 # Setup
 
-ppkt2synergy will be added to PyPI shortly. 
+## Install from PyPI (recommended)
 
-For now, create a virtual environment in the directory you will work in, 
+```bash
+pip install ppkt2synergy
+```
+
+---
+
+## Install from source (development)
+Create a virtual environment in the directory you will work in, 
 
 ```bash
 python3 -m venv venv
@@ -10,10 +17,18 @@ source venv/bin/activate
 pip install --upgrade pip
 ```
 
-then change to the root directory of this package and enter the following commands.
-
 ```bash
+git clone https://github.com/P2GX/ppkt2synergy.git
+cd ppkt2synergy
 pip install -e .
 ```
 
-then change back to the target directory. See tutorial for hints on getting started.
+---
+
+## Requirements
+
+* Python >= 3.10
+
+---
+
+See the tutorial for a complete workflow and usage examples.

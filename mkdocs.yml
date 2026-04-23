@@ -46,7 +46,14 @@ nav:
   - Setup: setup.md
   - Tutorial: tutorial.md
   - Internal: internal.md
-  - API: api/ppkt2synergy.md
+  - Usage:
+    - Load data: usage/loading.md
+    - Prepare dataset: usage/dataset.md
+    - Correlation analysis: usage/correlation.md
+    - Synergy analysis: usage/synergy.md
+    
+  - API: 
+    - ppkt2synergy: api/index.md
 
 site_url: https://P2GX.github.io/ppkt2synergy/
 repo_url: https://github.com/P2GX/ppkt2synergy/
