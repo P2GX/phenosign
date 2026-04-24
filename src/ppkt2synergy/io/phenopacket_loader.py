@@ -84,7 +84,7 @@ def load_phenopackets_by_cohort(
 def load_phenopackets_by_disease(
     diseases: str | Sequence[str],
     ppkt_store_version: str | None = None,
-) -> list[ppkt.Phenopacket]:
+) -> list[EnrichedPhenopacket]:
     """
     Load phenopackets with observed disease identifiers matching one or
     more requested diseases.
@@ -100,8 +100,8 @@ def load_phenopackets_by_disease(
 
     Returns
     -------
-    list[ppkt.Phenopacket]
-        Phenopackets that contain at least one matching observed disease.
+    list[EnrichedPhenopacket]
+        Phenopackets that contain at least one matching observed disease and annotated with cohort membership.
     """
     if isinstance(diseases, str):
         disease_set = {diseases}
@@ -122,7 +122,7 @@ def load_phenopackets_by_disease(
     registry = configure_phenopacket_registry()
 
     try:
-        matched_phenopackets: list[ppkt.Phenopacket] = []
+        matched_phenopackets: list[EnrichedPhenopacket] = []
 
         with registry.open_phenopacket_store(release=ppkt_store_version) as ps:
             for cohort in ps.cohorts():
@@ -134,7 +134,7 @@ def load_phenopackets_by_disease(
                         if getattr(disease, "excluded", False):
                             continue
                         if disease.term.id in disease_set:
-                            matched_phenopackets.append(phenopacket)
+                            matched_phenopackets.append(EnrichedPhenopacket(phenopacket=phenopacket, cohort=cohort.name))
                             break
 
         return matched_phenopackets

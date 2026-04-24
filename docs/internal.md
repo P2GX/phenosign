@@ -1,6 +1,6 @@
 # Internal
 
-Instructions for maintaining this resource
+This page contains internal instructions for maintaining and releasing the project.
 
 
 
@@ -14,12 +14,7 @@ To set things up, perform the following steps (substitute name of venv if needed
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install mkdocs
-pip install mkdocs-material
-pip install mkdocs-material[imaging]
-pip install pillow cairosvg
-pip install mkdocs-material-extensions
-pip install mkdocstrings[python]
+pip install -e .[docs]
 ```
 
 To start a local server, enter:

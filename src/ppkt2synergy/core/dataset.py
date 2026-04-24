@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Sequence
+from collections.abc import Sequence
 import pandas as pd
 import json
 import logging
