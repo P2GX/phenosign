@@ -33,12 +33,27 @@ theme:
 
 plugins:
   - search
+  - gen-files:
+      scripts:
+        - docs/generate_api_docs.py
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["src"] 
 
 nav:
   - Home: index.md
-  - Setup: setup.md
+  - Installation: installation.md
   - Tutorial: tutorial.md
   - Internal: internal.md
+  - Usage:
+    - Load data: usage/loading.md
+    - Prepare dataset: usage/dataset.md
+    - Correlation analysis: usage/correlation.md
+    - Synergy analysis: usage/synergy.md
+    
+  - API: 
+    - ppkt2synergy: api/index.md
 
 site_url: https://P2GX.github.io/ppkt2synergy/
 repo_url: https://github.com/P2GX/ppkt2synergy/

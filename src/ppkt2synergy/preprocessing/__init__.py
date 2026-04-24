@@ -1,12 +1,11 @@
+from .adapters import phenopackets_to_records, enriched_phenopackets_to_records
+from .dataset_builder import PhenotypeDatasetBuilder
 
-from .phenopacket_matrix_generator import PhenopacketMatrixGenerator
-from .phenopacket_matrix_processor import PhenopacketMatrixProcessor
-from ._utils import HPOHierarchyUtils
 
 
 
 __all__ = [
-    "PhenopacketMatrixGenerator",
-    "PhenopacketMatrixProcessor",
-    "HPOHierarchyUtils"
+    "phenopackets_to_records",
+    "enriched_phenopackets_to_records",
+    "PhenotypeDatasetBuilder",
 ]

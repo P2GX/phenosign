@@ -163,3 +163,8 @@ cython_debug/
 
 
 .vscode/
+**/*.html
+**.xlsx  
+.idea/
+**/.gpsea_cache/
+docs/api/

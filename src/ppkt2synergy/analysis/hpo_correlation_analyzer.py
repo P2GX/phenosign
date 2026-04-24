@@ -1,433 +1,460 @@
-import numpy as np
-import pandas as pd
-from typing import Dict, Union, Tuple,Optional
-from joblib import Parallel, delayed
-import scipy.stats
-from .correlation_type import CorrelationType
-import plotly.graph_objs as go
 import logging
 from os import path
-from tqdm import tqdm
-from statsmodels.stats.multitest import multipletests
-from scipy.sparse import coo_matrix, triu
-from itertools import chain
 
+import numpy as np
+import pandas as pd
+import plotly.graph_objs as go
+import scipy.stats
+from joblib import Parallel, delayed
+from scipy.sparse import coo_matrix, triu
+from statsmodels.stats.multitest import multipletests
+from tqdm import tqdm
+
+from ..core import PhenotypeDataset
+from .correlation_type import CorrelationType
 
 logger = logging.getLogger(__name__)
 
-class HPOStatisticsAnalyzer:
+class HPOCorrelationAnalyzer:
 
     """
-    Analyze pairwise statistical relationships between HPO terms and disease-related targets in a cohort.
+    Analyze pairwise correlations between HPO terms.
 
-    This class provides tools to compute and visualize correlations between HPO terms and disease status 
-    (or variant effect matrices), using a variety of statistical tests such as Spearman, Kendall, or Phi coefficient.
-    
-    It supports filtering weak correlations and highlighting statistically significant relationships in a heatmap.
+    This class computes and visualizes pairwise correlations between HPO
+    features using Spearman, Kendall, or Phi coefficients.
+
+    Notes
+    -----
+    - Input HPO matrices are expected to use ``1`` for observed terms,
+      ``0`` for excluded terms, and ``NaN`` for unknown terms.
+    - Correlations are evaluated only for pairs with sufficient numbers of
+      valid individuals.
 
     Example:
-        from ppkt2synergy import CohortDataLoader, HPOStatisticsAnalyzer
-        >>> phenopackets = CohortDataLoader.from_ppkt_store('FBN1')
-        >>> hpo_matrix, target_matrix = PhenopacketMatrixProcessor.prepare_hpo_data(
-                phenopackets, threshold=0.5, mode='leaf', use_label=True)
-        >>> analyzer =HPOStatisticsAnalyzer(hpo_matrix, min_individuals_for_correlation_test=40)
-        >>> coef_matrix, pval_matrix = analyzer.compute_correlation_matrices("Spearman")
+        from ppkt2synergy import load_phenopackets, PhenotypeDatasetBuilder,, HPOStatisticsAnalyzer
+        >>> phenopackets = load_phenopackets('FBN1')
+        >>> dataset_builder = PhenopacketAssembler(phenopackets)
+        >>> dataset = dataset_builder.build(missing_threshold=0.9)
+        >>> analyzer =HPOStatisticsAnalyzer(dataset, min_individuals_for_correlation_test=40)
+        >>> analyzer.compute_correlation_matrices("Spearman")
         >>> analyzer.plot_correlation_heatmap_with_significance("Spearman")
-    
-    Notes:
-        - Requires at least 30 valid data points per pairwise comparison.
-        - Assumes binary input matrices (0/1 presence/absence format).
+  
     """
     def __init__(
-            self,  
-            hpo_data: Tuple[pd.DataFrame,pd.DataFrame,Optional[pd.DataFrame]], 
-            min_individuals_for_correlation_test: int = 30,
-            min_cooccurrence_count = 1
-        ):
-            """
-            Initialize the HPOStatisticsAnalyzer.
+        self,  
+        dataset: PhenotypeDataset, 
+        min_individuals_for_correlation_test: int = 30,
+        min_cooccurrence_count = 1
+    ):
+        """
+        Parameters
+        ----------
+        dataset : PhenotypeDataset
+            Dataset containing HPO feature data and metadata.
+        min_individuals_for_correlation_test : int, default=30
+            Minimum number of valid individuals required to evaluate a
+            pairwise correlation.
+        min_cooccurrence_count : int, default=1
+            Minimum number of ``0/0`` observations required for a feature
+            pair to be considered valid for correlation testing.
+        """
+        if not isinstance(dataset, PhenotypeDataset):
+            raise TypeError("`dataset` must be a `PhenotypeDataset` instance.")
+        self.dataset= dataset
+        self.hpo_matrix = self.dataset.hpo_data.matrix
+        self.hpo_terms = self.hpo_matrix.columns
+        self.n_features = self.hpo_matrix.shape[1]
+        self.label_mapping = self.dataset.hpo_data.label_mapping 
 
-            Args:
-            hpo_data(Tuple[pd.DataFrame,Optional[pd.DataFrame]]):
-            - Feature matrix of shape (n_samples, n_features): 
-                Non-NaN values must be 0 or 1. DataFrame inputs will be converted to a NumPy array.
-            - relationship_mask (n_features, n_features):
-                Optional 2D array (n_features x n_features) indicating valid feature pairs to evaluate.
-                Can be used to skip predefined pairs (e.g. based on HPO hierarchy or previous results).
-                If provided, it will be converted to a NumPy array and used to initialize the synergy matrix.
-            min_individuals_for_correlation_test(int): (default: 30)
-                Minimum number of valid individuals required to perform correlation tests.
-            min_cooccurrence_count (int, default=1):
-                Minimum number of co-occurrences (both features present, 1/1) 
-                **and** co-exclusions (both features absent, 0/0) required 
-                for a feature pair to be considered valid for correlation testing.
-                This ensures that both positive and negative concordance are observed 
-                more than once, avoiding spurious correlations.
+        relationship_mask_df = self.dataset.hpo_data.relationship_mask
 
-            Raises:
-                ValueError: If min_individuals_for_correlation_test is less than 30.
-            """
-            if isinstance(hpo_data, tuple):
-                hpo_matrix, relationship_mask, pmids_matrix = hpo_data
-            else:
-                raise TypeError("hpo_data must be a tuple of (hpo_matrix, relationship_mask)")
-            if isinstance(hpo_matrix, pd.DataFrame):
-                self.hpo_matrix = hpo_matrix
-                self.hpo_terms = hpo_matrix.columns
-                self.n_features = hpo_matrix.shape[1]
-            else:
-                raise TypeError("hpo_matrix must be a pandas DataFrame")
-            
-            if isinstance(pmids_matrix, pd.DataFrame):
-                self.patient_pmids = pmids_matrix
-            
-            if not np.all(np.isin(hpo_matrix.to_numpy()[~np.isnan(hpo_matrix.to_numpy())], [0, 1])):
-                raise ValueError("Non-NaN values in HPO Matrix must be either 0 or 1")
-            
-            self.relationship_mask = None
-            if relationship_mask is not None:
-                if isinstance(relationship_mask, pd.DataFrame):
-                    self.relationship_mask = relationship_mask.to_numpy() 
-                else:
-                    raise ValueError("relationship_mask must be a pd.DataFrame")
-                    
-                if relationship_mask.shape[0] != relationship_mask.shape[1] or \
-                    relationship_mask.shape[0] != hpo_matrix.shape[1]:
-                    raise ValueError("relationship_mask must have the same number of rows and columns as hpo_matrix has features")
-                
-                if not np.all(np.isin(self.relationship_mask[~np.isnan(self.relationship_mask)], [0])):
-                    raise ValueError("relationship_mask must contain only 0 or NaN")
-            
-            #if min_individuals_for_correlation_test < 30:
-            #    raise ValueError("min_individuals_for_correlation_test must not be less than 30.")
-            self.min_individuals_for_correlation_test = min_individuals_for_correlation_test
-            self.min_coccurrence_count = min_cooccurrence_count
+        if relationship_mask_df is not None:
+            self.relationship_mask = relationship_mask_df.to_numpy(copy=True)
+        else:
+            logger.warning("No relationship_mask provided. All feature pairs will be evaluated for synergy.")
+            self.relationship_mask = np.zeros((self.n_features, self.n_features))
+            np.fill_diagonal(self.relationship_mask, np.nan)    
+        
+        self.min_individuals_for_correlation_test = min_individuals_for_correlation_test
+        self.min_coccurrence_count = min_cooccurrence_count
 
-    def _calculate_pairwise_stats( 
-            self,
-            observed_status_A: np.ndarray, 
-            observed_status_B: np.ndarray,
-            correlation_type: CorrelationType = CorrelationType.SPEARMAN,
-        ) -> Dict[str, Union[float, str]]:
-            """
-            Calculate selected statistical metric (spearman, kendall, or phi) and its p-value
-            for two binary (0/1) observed status vectors.
+    def _calculate_stats( 
+        self,
+        observed_status_A: np.ndarray, 
+        observed_status_B: np.ndarray,
+        correlation_type: CorrelationType = CorrelationType.SPEARMAN,
+    ) -> tuple[float, float]:
+        """
+        Compute a correlation coefficient and p-value for two binary vectors.
 
-            Args:
-                observed_status_A(np.ndarray): 
-                    Binary values (0/1) for the first variable.
-                observed_status_B(np.ndarray): 
-                    Binary values (0/1) for the second variable.
-                correlation_type (CorrelationType): (default: CorrelationType.SPEARMAN)
-                    Correlation metric to compute. One of:
-                    - CorrelationType.SPEARMAN
-                    - CorrelationType.KENDALL
-                    - CorrelationType.PHI
+        Parameters
+        ----------
+        observed_status_a : np.ndarray
+            Binary values for the first variable.
+        observed_status_b : np.ndarray
+            Binary values for the second variable.
+        correlation_type : CorrelationType, default=CorrelationType.SPEARMAN
+            Correlation metric to compute.
 
-            Returns:
-                Dict[str, Union[float, str]]: 
-                    A dictionary with the selected statistic and its p-value.
+        Returns
+        -------
+        tuple[float, float]
+            Correlation coefficient and p-value.
 
-            Raises:
-                ValueError: If the provided correlation_name is not supported.
-            """
-            if correlation_type == CorrelationType.SPEARMAN:
-                coef, pval = scipy.stats.spearmanr(observed_status_A, observed_status_B)
-                return coef, pval
+        Raises
+        ------
+        ValueError
+            If the correlation type is not supported.
+        """
+        if correlation_type == CorrelationType.SPEARMAN:
+            coef, pval = scipy.stats.spearmanr(observed_status_A, observed_status_B)
+            return coef, pval
 
-            elif correlation_type == CorrelationType.KENDALL:
-                coef, pval = scipy.stats.kendalltau(observed_status_A, observed_status_B)
-                return coef, pval
+        elif correlation_type == CorrelationType.KENDALL:
+            coef, pval = scipy.stats.kendalltau(observed_status_A, observed_status_B)
+            return coef, pval
 
-            elif correlation_type == CorrelationType.PHI:
-                confusion_matrix = pd.crosstab(observed_status_A, observed_status_B, dropna=False)
-                try:
-                    chi2, p, _, _ = scipy.stats.chi2_contingency(confusion_matrix)
-                    n = confusion_matrix.sum().sum()
-                    phi = np.sqrt(chi2 / n)
-                    return phi, p
-                except ValueError:
-                    return np.nan, np.nan
+        elif correlation_type == CorrelationType.PHI:
+            confusion_matrix = pd.crosstab(observed_status_A, observed_status_B, dropna=False)
+            try:
+                chi2, p, _, _ = scipy.stats.chi2_contingency(confusion_matrix)
+                n = confusion_matrix.sum().sum()
+                phi = np.sqrt(chi2 / n)
+                return phi, p
+            except ValueError:
+                return np.nan, np.nan
 
-            else:
-                raise ValueError(f"Unsupported CorrelationType '{stats_type}'.")
+        else:
+            raise ValueError(f"Unsupported CorrelationType '{correlation_type!r}'.")
 
     def _calculate_pairwise_correlation(
-            self,
-            col_A: int,
-            col_B: int, 
-            correlation_type: CorrelationType = CorrelationType.SPEARMAN,
-        ) -> Dict[str, Union[float, str]]:
-            """
-            Perform correlation tests between two columns (HPO terms, diseases).
+        self,
+        col_a: int,
+        col_b: int, 
+        correlation_type: CorrelationType = CorrelationType.SPEARMAN,
+        include_pmids: bool = True
+    ) -> tuple[int, int, float, float, dict]:
+        """
+        Compute the correlation between two HPO term columns.
 
-            Args:
-                col_A(int): 
-                    The first column to correlate.
-                col_B(int): 
-                    The second column to correlate.
-                correlation_type (CorrelationType): (default: CorrelationType.SPEARMAN)
-                    Correlation metric to compute. One of:
-                    - CorrelationType.SPEARMAN
-                    - CorrelationType.KENDALL
-                    - CorrelationType.PHI
+        Parameters
+        ----------
+        col_a : int
+            Index of the first HPO term column.
+        col_b : int
+            Index of the second HPO term column.
+        correlation_type : CorrelationType, default=CorrelationType.SPEARMAN
+            Correlation metric to compute.
+        include_pmids : bool, default=True
+            If ``True``, aggregate PMIDs from contributing individuals and
+            include them in the result table.
 
-            Returns:
-                Optional[Dict[str, Union[float, str]]]:
-                    Dictionary with correlation results, or None if invalid or insufficient data.
 
-            Raises:
-                ValueError: If insufficient data for correlation test or invalid columns (all 0 or 1).
-            """
-            
-            matrix = self.hpo_matrix.values
-            mask = (~np.isnan(matrix[:, col_A])) & (~np.isnan(matrix[:, col_B]))
-            col_A_values = matrix[mask, col_A]
-            col_B_values = matrix[mask, col_B]
+        Returns
+        -------
+        tuple[int, int, float, float, dict]
+            Column indices, coefficient, p-value, and contingency counts.
+        """
+        
+        matrix = self.hpo_matrix.values
+        mask = (~np.isnan(matrix[:, col_a])) & (~np.isnan(matrix[:, col_b]))
+        col_a_values = matrix[mask, col_a]
+        col_b_values = matrix[mask, col_b]
 
-            count_11 = np.sum((col_A_values == 1) & (col_B_values == 1))
-            count_10 = np.sum((col_A_values == 1) & (col_B_values == 0))
-            count_01 = np.sum((col_A_values == 0) & (col_B_values == 1))
-            count_00 = np.sum((col_A_values == 0) & (col_B_values == 0))
-            total = len(col_A_values)
-            
-            if np.all(col_A_values == col_A_values[0]) or np.all(col_B_values == col_B_values[0]):
-                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
-            
-            # --- Count co-occurrence ---
-            observed_observed = np.sum((col_A_values == 1) & (col_B_values == 1))
-            excluded_excluded = np.sum((col_A_values == 0) & (col_B_values == 0))
+        count_11 = np.sum((col_a_values == 1) & (col_b_values == 1))
+        count_10 = np.sum((col_a_values == 1) & (col_b_values == 0))
+        count_01 = np.sum((col_a_values == 0) & (col_b_values == 1))
+        count_00 = np.sum((col_a_values == 0) & (col_b_values == 0))
+        total = len(col_a_values)
 
-            if observed_observed <= self.min_coccurrence_count or excluded_excluded <= self.min_coccurrence_count:
-                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
+        empty_counts = {
+            "00": 0,
+            "01": 0,
+            "10": 0,
+            "11": 0,
+            "N": 0,
+            "n_pmid": np.nan,
+            "pmids": [],
+        }
+        
+        if np.all(col_a_values == col_a_values[0]) or np.all(col_b_values == col_b_values[0]):
+            return (col_a, col_b, np.nan, np.nan, empty_counts)
+        
+        excluded_excluded = np.sum((col_a_values == 0) & (col_b_values == 0))
+        if excluded_excluded <= self.min_coccurrence_count:
+            return (col_a, col_b, np.nan, np.nan, empty_counts)
 
-            try:
-                coef, p_val = self._calculate_pairwise_stats(col_A_values, col_B_values, correlation_type=correlation_type)
-                patient_ids = self.hpo_matrix.index[mask]
-                pmids_list = self.patient_pmids.loc[patient_ids, 'pmids'].to_numpy()
-                all_pmids = set(chain.from_iterable(pmids_list))
+        try:
+            coef, p_val = self._calculate_stats(col_a_values, col_b_values, correlation_type=correlation_type)
+            individual_ids = self.hpo_matrix.index[mask]
+            if include_pmids:
+                pmids_list = self.dataset.get_pmids(individual_ids).to_numpy()
+                all_pmids = sorted(
+                    {
+                        str(pmid)
+                        for pmids in pmids_list
+                        if pmids is not None
+                        for pmid in pmids
+                        if pd.notna(pmid)
+                    }
+                )
                 n_pmids = len(all_pmids)
-                return (col_A, col_B, coef, p_val, {"00":count_00,"01":count_01,"10":count_10,"11":count_11,"N":total,"n_pmid": n_pmids})
-            except Exception as e:
-                return (col_A, col_B, np.nan, np.nan, {"00":0,"01":0,"10":0,"11":0,"N":0,"n_pmid": np.nan})
+            else:
+                all_pmids = []
+                n_pmids = np.nan
+
+            return (col_a, col_b, coef, p_val, {
+                "00": count_00,
+                "01": count_01,
+                "10": count_10,
+                "11": count_11,
+                "N": total,
+                "n_pmid": n_pmids,
+                "pmids": all_pmids,
+            })
+        except Exception as e:
+            logger.error(
+                "Error calculating correlation for columns %d and %d: %s",
+                col_a,
+                col_b,
+                e,
+            )
+            return col_a, col_b, np.nan, np.nan, empty_counts
 
     def compute_correlation_matrix(
-            self, 
-            correlation_type: CorrelationType = CorrelationType.SPEARMAN, 
-            n_jobs: int = -1,
-        ) -> None:
+        self, 
+        correlation_type: CorrelationType = CorrelationType.SPEARMAN, 
+        n_jobs: int = -1,
+        include_pmids: bool = True
+    ) -> pd.DataFrame:
         """
-        Compute pairwise correlation coefficients and p-values between HPO terms.
+        Compute pairwise correlations between HPO terms.
 
-        This function first identifies valid feature pairs (columns) that have 
-        sufficient non-missing individuals using a sparse matrix pre-filtering 
-        approach, then computes correlation statistics in parallel.
+        Parameters
+        ----------
+        correlation_type : CorrelationType, default=CorrelationType.SPEARMAN
+            Correlation metric to compute.
+        n_jobs : int, default=-1
+            Number of parallel jobs. ``-1`` uses all available CPUs.
+        include_pmids : bool, default=True
+            If ``True``, aggregate PMIDs from contributing individuals and
+            include them in the result table.
 
-        Args:
-            correlation_type (CorrelationType, optional):
-                Correlation metric to compute. One of:
-                - CorrelationType.SPEARMAN
-                - CorrelationType.KENDALL
-                - CorrelationType.PHI
-                Default: CorrelationType.SPEARMAN.
-            n_jobs (int, optional):
-                Number of parallel jobs to use for pairwise correlation.
-                -1 uses all available CPU cores. Default: -1.
 
-        Returns:
-            pd.DataFrame:
-                A DataFrame containing pairwise correlation results.
-                Each row corresponds to one valid pair of HPO terms and includes:
-                    - HPO_A (str): Name of the first HPO term.
-                    - HPO_B (str): Name of the second HPO term.
-                    - coefficient (float): Correlation coefficient.
-                    - p_value (float): Corresponding p-value (NaN if not applicable).
-                    - p_value_corrected (float): P-value adjusted for multiple testing using the Benjamini–Hochberg FDR method.
-                    - Count_00 (int): Number of individuals with (0,0).
-                    - Count_01 (int): Number of individuals with (0,1).
-                    - Count_10 (int): Number of individuals with (1,0).
-                    - Count_11 (int): Number of individuals with (1,1).
-                    - n_patients (int): Total number of valid individuals.
-                    - n_pmids (int): Number of PubMed references associated with the pair (if available).
-
-        Side Effects:
-            - Stores the full correlation coefficient matrix in `self.coef_df`.
-            - Stores the full p-value matrix in `self.pval_df`.
-            - Stores the pairwise results table in `self.correlation_results`.
+        Returns
+        -------
+        pd.DataFrame
+            Table of pairwise correlation results.
         """
         if not isinstance(correlation_type, CorrelationType):
-            raise ValueError(f"stats_type must be a CorrelationType, got {type(correlation_type)}")
-        
-        columns = self.hpo_terms
-        n_cols = len(columns)
-        X = self.hpo_matrix.to_numpy()
-        mask = ~np.isnan(X)  # True = non-NaN
-        # Compute valid counts for each pair
+            raise ValueError(
+                f"`correlation_type` must be a `CorrelationType`, got {type(correlation_type).__name__}."
+            )
+
+        x = self.hpo_matrix.to_numpy()
+
+        has_one = np.any(x == 1)
+        has_zero = np.any(x == 0)
+
+        if not has_one or not has_zero:
+            raise ValueError(
+                "HPO matrix lacks sufficient variation for correlation analysis.\n"
+                f"Detected values: "
+                f"{'1 present, ' if has_one else 'no 1, '}"
+                f"{'0 present' if has_zero else 'no 0'}.\n"
+                "At least one observed (1) and one excluded (0) value are required.\n"
+                "Please check your preprocessing (e.g., missing exclusion annotations)."
+            )
+
+        mask = ~np.isnan(x)  
         valid_counts = mask.T.astype(int) @ mask.astype(int)
         valid_counts_sparse = triu(coo_matrix(valid_counts), k=1)
-        rows, cols, counts = valid_counts_sparse.row, valid_counts_sparse.col, valid_counts_sparse.data
+        rows, cols, counts = (
+            valid_counts_sparse.row, 
+            valid_counts_sparse.col, 
+            valid_counts_sparse.data
+        )
 
-        # Apply relationship mask if present
-        if self.relationship_mask is not None:
-            ontology_values = self.relationship_mask[rows, cols]
-            ontology_candidate = ~np.isnan(ontology_values)
-            candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_correlation_test))[0]
-        else:
-            candidate_idx = np.where(counts >= self.min_individuals_for_correlation_test)[0]
+        ontology_values = self.relationship_mask[rows, cols]
+        ontology_candidate = ~np.isnan(ontology_values)
+        candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_correlation_test))[0]
 
         rows_cand, cols_cand = rows[candidate_idx], cols[candidate_idx]
         pairs = list(zip(rows_cand, cols_cand))
 
+        if len(pairs) == 0:
+            logger.warning(
+                "No valid HPO term pairs remain after pre-filtering for correlation analysis.\n"
+                "This occurs before pairwise computation and usually indicates that no feature pairs\n"
+                "passed the initial candidate selection.\n\n"
+                "Possible reasons:\n"
+                f"- too few valid individuals per pair (min required = {self.min_individuals_for_correlation_test})\n"
+                "- ontology relationship masking removed most pairs (ancestor/descendant/self)\n"
+            )
+
         results = Parallel(n_jobs=n_jobs)(
-            delayed(self._calculate_pairwise_correlation)(i, j, correlation_type=correlation_type)
+            delayed(self._calculate_pairwise_correlation)(i, j, correlation_type=correlation_type, include_pmids=include_pmids)
             for i, j in tqdm(pairs, desc="Calculating pairwise correlation")
         )
         
-        matrix = np.full((n_cols, n_cols), np.nan)
-        pvalue_matrix = np.full((n_cols, n_cols), np.nan)
+        coef_matrix = np.full((self.n_features, self.n_features), np.nan)
+        pvalue_matrix = np.full((self.n_features, self.n_features), np.nan)
 
         rows = []
         for r in results:
             i, j, coef, pval, counts = r
-            matrix[i, j] = coef
-            matrix[j, i] = coef
+            coef_matrix[i, j] = coef
+            coef_matrix[j, i] = coef
             pvalue_matrix[i, j] = pval
             pvalue_matrix[j, i] = pval
-            hpo1, hpo2 = columns[i], columns[j]
-            if j > i:  # only upper triangle
+
+            hpo_a, hpo_b = self.hpo_terms[i], self.hpo_terms[j]
+            if j > i:  
                 if not np.isnan(coef):
-                    rows.append({
-                        "HPO_A": hpo1,
-                        "HPO_B": hpo2,
-                        "correlation": coef,
-                        "p_value": pval,
-                        "Count_00": counts["00"],
-                        "Count_01": counts["01"],
-                        "Count_10": counts["10"],
-                        "Count_11": counts["11"],
-                        "n_patients": counts["N"],
-                        "n_pmids": counts["n_pmid"]
-                    }) 
-   
+                    row_data = {
+                    "HPO_A": hpo_a,
+                    **({"HPO_A_label": self.label_mapping.get(hpo_a)} if self.label_mapping.get(hpo_a) else {}),
+                    "HPO_B": hpo_b,
+                    **({"HPO_B_label": self.label_mapping.get(hpo_b)} if self.label_mapping.get(hpo_b) else {}),
+                    "correlation": coef,
+                    "p_value": pval,
+                    "Count_00": counts["00"],
+                    "Count_01": counts["01"],
+                    "Count_10": counts["10"],
+                    "Count_11": counts["11"],
+                    "n_individuals": counts["N"],
+                    }
+                    if include_pmids:
+                        row_data["n_pmids"] = counts["n_pmid"]
+                        row_data["pmids"] = ";".join(counts.get("pmids", []))
+                    rows.append(row_data)
+
+        valid_mask = ~(np.isnan(coef_matrix).all(axis=0)) 
+        if len(valid_mask) == 0:
+            logger.warning("No valid correlations were found between HPO terms. "
+                            "The resulting correlation matrix will be empty.\n"
+                            "Possible reasons include:\n"
+                            "- Filtering thresholds are too strict (co-occurrence constraints)\n"
+                            "- HPO terms are constant (no variability across individuals)\n")
+                            
+        filtered_columns = self.hpo_terms[valid_mask]
+        self.coef_df = pd.DataFrame(coef_matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
+        self.pval_df = pd.DataFrame(pvalue_matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
+
         self.correlation_results = pd.DataFrame(rows)
         if not self.correlation_results.empty:
             pvals = self.correlation_results["p_value"].values
             _, pvals_corrected, _, _ = multipletests(pvals, method="fdr_bh")
+            loc = int(self.correlation_results.columns.get_loc("p_value"))
             self.correlation_results.insert(
-                self.correlation_results.columns.get_loc("p_value") + 1, 
-                "p_value_corrected",                                       
+                loc + 1,
+                "p_value_corrected",
                 pvals_corrected
             )
-        
-        valid_mask = ~(np.isnan(matrix).all(axis=0)) | (np.nan_to_num(matrix, nan=0).sum(axis=0) == 0)
-        if len(valid_mask) == 0:
-            logger.warning("Warning: No valid correlation between HPO terms. Correlation matrix will be empty.")
-        
-        filtered_columns = self.hpo_terms[valid_mask]
-        self.coef_df = pd.DataFrame(matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
-        self.pval_df = pd.DataFrame(pvalue_matrix[np.ix_(valid_mask, valid_mask)], index=filtered_columns, columns=filtered_columns)
+            self.correlation_results.sort_values(by="p_value", ascending=True, inplace=True)
 
         return self.correlation_results
     
     def save_correlation_results(
-            self, 
-            lower_bound: float=-0.0, 
-            upper_bound: float=0.0,
-            alpha: float = 0.0,
-            output_file: str="correlation_results.csv"
-        ) -> None:
+        self, 
+        abs_threshold: float = 0.0,
+        adj_pval_threshold: float = 1.0,
+        output_file: str="correlation_results.csv"
+    ) -> None:
         """
-        Export the computed correlation results to a file.
+        Save correlation results to a CSV or Excel file.
 
-        The correlation matrices (`self.coef_df` and `self.pval_df`) must have 
-        been computed previously by calling `compute_correlation_matrix`.
+        Parameters
+        ----------
+        abs_threshold : float, default=0.0
+            Minimum absolute correlation coefficient to retain.
+        adj_pval_threshold : float, default=1.0
+            Maximum adjusted p-value to retain.
+        output_file : str, default="correlation_results.csv"
+            Output file path. Supported formats are ``.csv`` and ``.xlsx``.
 
-        Args:
-            lower_bound (float):
-                Minimum correlation value to include. 
-            upper_bound (float):
-                Maximum correlation value to include. 
-            alpha (float):
-                Significance threshold for p-values. Only correlations with p < alpha are kept.
-            output_file (str):
-                Path to the output file. Supported formats:
-                - ".csv": saves as a CSV file.
-                - ".xlsx" or other extensions: saves as an Excel file.
-
-        Raises:
-            ValueError:
-                If `self.correlation_results` has not been initialized
-                (i.e., `compute_correlation_matrix` has not been run).
-
-        Example:
-            >>> analyzer.compute_correlation_matrix()
-            >>> analyzer.save_correlation_results("correlations.csv")
-            >>> analyzer.save_correlation_results("correlations.xlsx")
+        Raises
+        ------
+        ValueError
+            If correlation results have not been computed or if thresholds
+            are invalid.
         """
-        
         if not hasattr(self, "correlation_results"):
             raise ValueError("Correlation results not computed. Run compute_correlation_matrix() first.")
         
         df = self.correlation_results.copy()
+        if df.empty:
+            logger.warning("Warning: Correlation results are empty. No file will be saved.")
+            return
 
-        if alpha > 0.0 and "p_value" in df.columns:
-            df = df[df["p_value"] < alpha]
+        if abs_threshold < 0.0 or abs_threshold > 1.0:
+            raise ValueError("abs_threshold must be between 0.0 and 1.0")
+        df = df[df["correlation"].abs() >= abs_threshold]
 
-        if lower_bound < 0.0 and upper_bound >0.0:
-            df = df[(df["correlation"] <= lower_bound) | (df["correlation"] >= upper_bound)]
+        if adj_pval_threshold < 0.0 or adj_pval_threshold > 1.0:
+            raise ValueError("adj_pval_threshold must be between 0.0 and 1.0")
+        df = df[df["p_value_corrected"] < adj_pval_threshold]
 
         ext = path.splitext(output_file)[1].lower()
         if ext not in [".csv", ".xlsx"]:
             raise ValueError(f"Unsupported file format: {ext}. Use '.csv' or '.xlsx'.")
   
-        if output_file.endswith(".csv"):
+        if ext == ".csv":
             df.to_csv(output_file, index=False)
         else:
             df.to_excel(output_file, index=False)    
 
     
     def filter_weak_correlations(
-            self, 
-            lower_bound: float=-0.55, 
-            upper_bound: float=0.55,
-            alpha: float = 0.05,
-        ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        self, 
+        abs_threshold: float = 0.55,
+        adj_pval_threshold: float = 0.1
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Remove weak correlations from the correlation matrix based on the given threshold.
+        Filter the correlation and p-value matrices by effect size and significance.
 
-        Args:
-            stats_name(str): (default: "spearman") 
-                The name of the statistic to calculate (e.g., "spearman", "kendall", "phi").
-            lower_bound(float): (default: -0.55)
-                The lower bound for filtering weak correlations.
-            upper_bound(float): (default: 0.55)
-                The upper bound for filtering weak correlations.
-            alpha: float = 0.05,
+        Parameters
+        ----------
+        abs_threshold : float, default=0.55
+            Minimum absolute correlation coefficient to retain.
+        adj_pval_threshold : float, default=0.1
+            Maximum adjusted p-value to retain.
 
-        Returns:
-            Tuple[pd.DataFrame, pd.DataFrame]:
-                - A DataFrame of cleaned correlation coefficients.
-                - A DataFrame of cleaned p-values.
+        Returns
+        -------
+        tuple[pd.DataFrame, pd.DataFrame]
+            Filtered correlation matrix and filtered p-value matrix.
         """
         if not hasattr(self, 'coef_df') or not hasattr(self, 'pval_df'):
             raise RuntimeError("Correlation matrix not found. Please run `compute_correlation_matrix()` first.")
+        
+        if self.correlation_results.empty:
+            logger.warning("Warning: Correlation results are empty. No correlations to filter.")
+            return
 
-        coef_matrix,p_value = self.coef_df.copy(), self.pval_df.copy()
+        coef_matrix = self.coef_df.copy()
+        p_value = self.pval_df.copy()
 
-        mask = (coef_matrix > lower_bound) & (coef_matrix < upper_bound)
+        if abs_threshold < 0.0 or abs_threshold > 1.0:
+            raise ValueError("abs_threshold must be between 0.0 and 1.0")
+        mask = coef_matrix.abs() < abs_threshold
         coef_matrix[mask] = np.nan
         p_value[mask] = np.nan
 
+        if adj_pval_threshold < 0.0 or adj_pval_threshold > 1.0:
+            raise ValueError("adj_pval_threshold must be between 0.0 and 1.0")
+        
         non_signif = self.correlation_results.loc[
-            self.correlation_results["p_value_corrected"] >= alpha, ["HPO_A", "HPO_B"]
+            (self.correlation_results["p_value_corrected"] >= adj_pval_threshold),
+            ["HPO_A", "HPO_B"]
         ]
         for _, row in non_signif.iterrows():
-            hpo1, hpo2 = row["HPO_A"], row["HPO_B"]
-            if hpo1 in coef_matrix.index and hpo2 in coef_matrix.columns:
-                coef_matrix.loc[hpo1, hpo2] = np.nan
-                coef_matrix.loc[hpo2, hpo1] = np.nan
-                p_value.loc[hpo1, hpo2] = np.nan
-                p_value.loc[hpo2, hpo1] = np.nan
+            hpo_a, hpo_b = row["HPO_A"], row["HPO_B"]
+            if hpo_a in coef_matrix.index and hpo_b in coef_matrix.columns:
+                coef_matrix.loc[hpo_a, hpo_b] = np.nan
+                coef_matrix.loc[hpo_b, hpo_a] = np.nan
+                p_value.loc[hpo_a, hpo_b] = np.nan
+                p_value.loc[hpo_b, hpo_a] = np.nan
     
         mask_rows = coef_matrix.isna().all(axis=1)
         mask_cols = coef_matrix.isna().all(axis=0)
@@ -436,34 +463,65 @@ class HPOStatisticsAnalyzer:
 
         return coef_matrix_cleaned, p_value_cleaned
     
+    def _format_hpo_pair(
+        self, 
+        hpo_id: str, 
+        label: str | None
+    ) -> str:
+        """Format an HPO term for display."""
+        if label:
+            return f"{label} ({hpo_id})"
+        return hpo_id
+    
+    def _format_pmids_for_tooltip(
+        self,
+        pmids: str | list[str] | None,
+        max_pmids: int = 5,
+    ) -> str:
+        """Format PMID values for hover text."""
+        if pmids is None or pmids == "":
+            return "None"
+
+        if isinstance(pmids, str):
+            pmid_list = [p.strip() for p in pmids.split(";") if p.strip()]
+        else:
+            pmid_list = [str(p).strip() for p in pmids if str(p).strip()]
+
+        if not pmid_list:
+            return "None"
+
+        if len(pmid_list) <= max_pmids:
+            return ", ".join(pmid_list)
+
+        shown = ", ".join(pmid_list[:max_pmids])
+        remaining = len(pmid_list) - max_pmids
+        return f"{shown} ... (+{remaining} more)"
 
     def plot_correlation_heatmap_with_significance(
-            self,
-            stats_name: str = "spearman",
-            lower_bound: float = -0.55,
-            upper_bound: float = 0.55,
-            alpha: float = 0.05,
-            title_name: str = "",
-        ) -> go.Figure:
+        self,
+        stats_name: str = "spearman",
+        abs_threshold: float = 0.55,
+        adj_pval_threshold: float = 0.1,
+        title_name: str = "",
+    ) -> go.Figure:
         """
-        Create an interactive Plotly heatmap showing correlation coefficients between features,
-        with hover information for p-values.
+        Plot a correlation heatmap with statistical filtering.
 
-        Parameters:
-            stats_name (str): 
-                Type of correlation coefficient to use ("spearman", "kendall", "phi").
-            lower_bound (float): 
-                Lower threshold to filter out weak correlations.
-            upper_bound (float): 
-                Upper threshold to filter out weak correlations.
-            alpha (float): (default: 0.05)
-                Significance threshold for P-value.
-            title_name (str): 
-                Optional subtitle to display under the main title.
+        Parameters
+        ----------
+        correlation_type : CorrelationType, default=CorrelationType.SPEARMAN
+            Correlation type used for the title.
+        abs_threshold : float, default=0.55
+            Minimum absolute correlation coefficient to display.
+        adj_pval_threshold : float, default=0.1
+            Maximum adjusted p-value to display.
+        title_name : str, optional
+            Optional subtitle.
 
-        Returns:
-            plotly.graph_objects.Figure:
-                A Plotly Figure object for the correlation heatmap.
+        Returns
+        -------
+        go.Figure
+            Plotly heatmap figure.
 
         Example:
             >>> # Compute correlations first
@@ -471,24 +529,47 @@ class HPOStatisticsAnalyzer:
             >>> # Generate heatmap (returns a Plotly Figure)
             >>> fig = analyzer.plot_correlation_heatmap_with_significance(
             ...     stats_name="spearman",
-            ...     lower_bound=-0.5,
-            ...     upper_bound=0.5,
+            ...     abs_threshold=0.55,
+            ...     corrected_alpha=0.1,
             ...     title_name="Cohort A"
             ... )
             >>> # Show in Jupyter or browser
             >>> fig.show()
         """
-        # --- Compute correlation and filter weak correlations ---
         coef_matrix, pval_matrix = self.filter_weak_correlations(
-            lower_bound=lower_bound,
-            upper_bound=upper_bound,
-            alpha=alpha,
+            abs_threshold=abs_threshold,
+            adj_pval_threshold=adj_pval_threshold
         )
 
         if coef_matrix.empty or np.isnan(coef_matrix.values).all():
-            raise ValueError("Coefficient matrix is empty. Try adjusting the lower_bound parameter.")
+            raise ValueError(
+                "The coefficient matrix is empty after filtering. "
+                "Try adjusting `abs_threshold` or `adj_pval_threshold`."
+            )
 
-        # --- Dynamic layout scaling based on matrix size ---
+        raw_coef_df = self.coef_df.loc[coef_matrix.index, coef_matrix.columns]
+
+        relationship_mask_df = pd.DataFrame(
+            self.relationship_mask,
+            index=self.hpo_terms,
+            columns=self.hpo_terms,
+        )
+
+        relationship_mask_df = relationship_mask_df.loc[coef_matrix.index, coef_matrix.columns]
+
+        status_matrix = pd.DataFrame(
+            "hidden_upper_triangle",
+            index=coef_matrix.index,
+            columns=coef_matrix.columns
+        )
+
+        relationship_isna = relationship_mask_df.isna()
+        relationship_notna = ~relationship_isna
+
+        status_matrix[relationship_isna] = "ontology_related"
+        status_matrix[raw_coef_df.isna() & relationship_notna] = "invalid_computation"
+        status_matrix[raw_coef_df.notna() & coef_matrix.isna()] = "filtered_by_statistics"
+
         n_rows, n_cols = coef_matrix.shape
         cell_size = 60  # Base pixel size per cell
 
@@ -499,20 +580,29 @@ class HPOStatisticsAnalyzer:
         label_fontsize = max(8, 12 - max_dim // 8)
         annot_fontsize = max(6, 12 - max_dim // 8)
 
-        # --- Prepare matrix and annotations ---
-        display_matrix = coef_matrix.fillna(0)
+        triangle_mask = pd.DataFrame(
+            np.tril(np.ones(coef_matrix.shape, dtype=bool), k=0),
+            index=coef_matrix.index,
+            columns=coef_matrix.columns
+        )
+        coef_matrix = coef_matrix.where(triangle_mask)
+        pval_matrix = pval_matrix.where(triangle_mask)
+        display_matrix = coef_matrix.where(triangle_mask)
+
+        nan_bg = pd.DataFrame(np.nan, index=coef_matrix.index, columns=coef_matrix.columns)
+        nan_bg[triangle_mask & coef_matrix.isna()] = 2
+
         text_matrix = np.where(
             np.isnan(coef_matrix.values),
             "",
             coef_matrix.round(2).astype(str)
         )
 
-        # --- Generate custom hover text per cell ---
-        hover_text = np.empty_like(coef_matrix, dtype=object)
         counts_lookup = {}
         for row in self.correlation_results.itertuples():
-            # forward (original counts)
-            counts_lookup[(row.HPO_A, row.HPO_B)] = {
+            has_pmids = hasattr(row, "n_pmids")
+
+            forward = {
                 "Coefficient": row.correlation,
                 "P_value": row.p_value,
                 "P_value_corrected": row.p_value_corrected,
@@ -520,11 +610,10 @@ class HPOStatisticsAnalyzer:
                 "Count_01": row.Count_01,
                 "Count_10": row.Count_10,
                 "Count_11": row.Count_11,
-                "n_patients": row.n_patients,
-                "n_pmids": row.n_pmids
+                "n_individuals": row.n_individuals,
             }
-            # backward (exchange Count_01 和 Count_10)
-            counts_lookup[(row.HPO_B, row.HPO_A)] = {
+
+            backward = {
                 "Coefficient": row.correlation,
                 "P_value": row.p_value,
                 "P_value_corrected": row.p_value_corrected,
@@ -532,10 +621,17 @@ class HPOStatisticsAnalyzer:
                 "Count_01": row.Count_10,  # swapped
                 "Count_10": row.Count_01,  # swapped
                 "Count_11": row.Count_11,
-                "n_patients": row.n_patients,
-                "n_pmids": row.n_pmids
+                "n_individuals": row.n_individuals,
             }
 
+            if has_pmids:
+                forward["n_pmids"] = row.n_pmids
+                forward["pmids"] = getattr(row, "pmids", "")
+                backward["n_pmids"] = row.n_pmids
+                backward["pmids"] = getattr(row, "pmids", "")
+
+            counts_lookup[(row.HPO_A, row.HPO_B)] = forward
+            counts_lookup[(row.HPO_B, row.HPO_A)] = backward
 
         hover_text = []
         for i, row in enumerate(coef_matrix.index):
@@ -543,45 +639,88 @@ class HPOStatisticsAnalyzer:
             for j, col in enumerate(coef_matrix.columns):
                 coef = coef_matrix.iloc[i, j]
                 pval = pval_matrix.iloc[i, j]
-                if np.isnan(coef):
+
+                display_row = self._format_hpo_pair(row, self.label_mapping.get(row))
+                display_col = self._format_hpo_pair(col, self.label_mapping.get(col))
+
+                if not triangle_mask.iloc[i, j]:
                     hover_row.append("")
+                elif np.isnan(coef):
+                    status = status_matrix.iloc[i, j]
+                    reason_map = {
+                        "ontology_related": "these two HPO terms are ontologically related (ancestor/descendant/self).",
+                        "invalid_computation": "the correlation could not be computed for this HPO pair.",
+                        "filtered_by_statistics": (
+                            f"the correlation did not pass the statistical filters "
+                            f"(|corr| >= {abs_threshold} and adjusted p-value < {adj_pval_threshold})."
+                        ),
+                        "hidden_upper_triangle": "only the lower-left triangle is displayed.",
+                    }
+
+                    reason_text = reason_map.get(status, f"{status}")
+
+                    hover_row.append(
+                        f"<b>HPO_A</b>: {display_col}<br>"
+                        f"<b>HPO_B</b>: {display_row}<br>"
+                        f"<b>Not shown due to</b>: {reason_text}"
+                    )
                 else:
                     counts = counts_lookup.get((row, col), {})
+                    has_pmids = "n_pmids" in counts
+                    if not has_pmids:
+                        pmid_block = ""
+                    else:
+                        pmid_text = self._format_pmids_for_tooltip(
+                            counts.get("pmids", ""),
+                            max_pmids=4,
+                        )
+                        pmid_block = (
+                            f"<b>N_PMIDs</b>: {int(counts.get('n_pmids', 0))}<br>"
+                            f"<b>PMIDs</b>: {pmid_text}"
+                        )
                     hover_row.append(
-                        f"<b>HPO_A</b>: {col}<br><b>HPO_B</b>: {row}<br>"
+                        f"<b>HPO_A</b>: {display_col}<br><b>HPO_B</b>: {display_row}<br>"
                         f"<b>Corr</b>: {coef:.2f}<br><b>p-val</b>: {pval:.6f}<br>"
                         f"<b>p-val_corrected</b>: {counts.get('P_value_corrected', np.nan):.6f}<br>"
-                        f"<b>Counts_00</b>: {counts.get('Count_00', 0)}, "
-                        f"<b>Counts_01</b>:{counts.get('Count_01', 0)}, "
-                        f"<b>Counts_10</b>:={counts.get('Count_10', 0)}, "
-                        f"<b>Counts_11</b>:{counts.get('Count_11', 0)}<br>"
-                        f"<b>Total patients</b>: {counts.get('n_patients', 0)}<br>"
-                        f"<b>PMIDs</b>: {counts.get('n_pmids', 0)}"
+                        f"<b>Counts(A/B): E/E</b>: {counts.get('Count_00', 0)}, "
+                        f"<b>E/O</b>: {counts.get('Count_01', 0)}, "
+                        f"<b>O/E</b>: {counts.get('Count_10', 0)}, "
+                        f"<b>O/O</b>: {counts.get('Count_11', 0)}<br>"
+                        f"<b>Total_individuals</b>: {counts.get('n_individuals', 0)}<br>"
+                        f"{pmid_block}"
                     )
             hover_text.append(hover_row)
           
-
-        # --- Create heatmap figure ---
-        fig = go.Figure(
-            go.Heatmap(
+        coef_matrix.rename(index=self.label_mapping, columns=self.label_mapping, inplace=True)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Heatmap(
+            z=nan_bg.values,
+            x=coef_matrix.columns,
+            y=coef_matrix.index,
+            colorscale=[[0, "#dbe7f3"], [1, "#dbe7f3"]],
+            showscale=False,
+            hoverinfo="skip",
+            xgap=1,
+            ygap=1,
+        ))
+        fig.add_trace(go.Heatmap(
                 z=display_matrix.values,
                 x=coef_matrix.columns,
                 y=coef_matrix.index,
-                colorscale="RdBu",
+                colorscale="Tealgrn",
+                zmin=-1,
+                zmax=1,
                 zmid=0,
                 text=text_matrix,
                 texttemplate=f"<span style='font-size:{annot_fontsize}px'>%{{text}}</span>",
                 hovertext=hover_text,
                 hoverinfo="text",
                 colorbar=dict(title="Corr.", len=0.8, thickness=title_fontsize),
-                zmin=-1,
-                zmax=1,
                 xgap=1,
                 ygap=1,
-            )
-        )
-
-        # --- Adjust layout ---
+            ))
+        
         max_ylabel_len = max(len(str(lbl)) for lbl in coef_matrix.index)
         left_margin = 60 + max_ylabel_len * label_fontsize
 
@@ -608,32 +747,28 @@ class HPOStatisticsAnalyzer:
             ),
             width=fig_size + left_margin,
             height=fig_size + left_margin,
-            plot_bgcolor="rgba(240,240,240,0.1)"
+            plot_bgcolor="white",
+            paper_bgcolor="white"
         )
+        fig.update_yaxes(autorange="reversed")
+
         return fig
     
 
     def save_correlation_heatmap(
-            self, 
-            fig: go.Figure, 
-            output_file: str
-        ) -> None:
+        self, 
+        fig: go.Figure, 
+        output_file: str
+    ) -> None:
         """
-        Save a correlation heatmap figure to an HTML file.
+        Save a correlation heatmap as an HTML file.
 
-        Args:
-            fig (plotly.graph_objects.Figure): 
-                The heatmap figure generated by `plot_correlation_heatmap_with_significance`.
-            output_file (str): 
-                Path to the HTML file where the figure should be saved. Must end with '.html'.
-
-        Raises:
-            ValueError:
-                If the output_file extension is not '.html'.
-
-        Example:
-            >>> fig = analyzer.plot_correlation_heatmap_with_significance()
-            >>> analyzer.save_correlation_heatmap(fig, "correlation_heatmap.html")
+        Parameters
+        ----------
+        fig : go.Figure
+            Heatmap figure.
+        output_file : str
+            Output HTML file path.
         """
         if not output_file.endswith(".html"):
             raise ValueError("output_file must have a '.html' extension")

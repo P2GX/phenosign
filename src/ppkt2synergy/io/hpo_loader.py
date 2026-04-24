@@ -1,29 +1,54 @@
 import hpotk
-from typing import Union, IO,Optional
+from typing import IO
+import logging
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 def load_hpo(
-        file: Optional[Union[IO, str]] = None
-    ) -> hpotk.MinimalOntology:
+    file: IO | str | None = None,
+    release: str | None = None
+) -> hpotk.MinimalOntology:
     """
-    Loads the HPO ontology from a file or fetches the latest version.
+    Load a minimal Human Phenotype Ontology (HPO) instance.
 
-    Args:
-        file (Union[IO, str], optional): (default: None)
-            Path or file object to the HPO ontology. If `None`, the latest version is loaded. 
+    The ontology is loaded from ``file`` if provided, otherwise from the
+    specified ``release``, and finally from the latest available release.
 
-    Returns:
-        hpotk.MinimalOntology: 
-            The loaded HPO ontology object.
+    Parameters
+    ----------
+    file : IO | str | None, optional
+        Path, URL, or file-like object pointing to an HPO ontology file.
+    release : str | None, optional
+        HPO release identifier, for example ``"v2023-10-09"``.
 
-    Example:
-        # Load the latest version of the HPO ontology
-        ontology = load_hpo()
+    Returns
+    -------
+    hpotk.MinimalOntology
+        Loaded HPO ontology.
 
-        # Load from a file
-        ontology = load_hpo('path/to/hpo_ontology.owl')
+    Examples
+    --------
+    >>> load_hpo(file="hp.json")
+    >>> load_hpo(file="https://github.com/obophenotype/human-phenotype-ontology/releases/download/v2023-10-09/hp.json")
+    >>> load_hpo(release="v2023-10-09")
+    >>> load_hpo()
     """
+
+    if file is not None:
+        ontology = hpotk.load_minimal_ontology(file)
+        logger.info("Loaded HPO ontology from file: %s", file)
+        return ontology
+
+    store = hpotk.configure_ontology_store()
     
-    if file is None:
-        store = hpotk.configure_ontology_store()
-        return store.load_minimal_hpo()
-    return hpotk.load_minimal_ontology(file)
+    if release is not None:
+        ontology = store.load_minimal_hpo(release=release)
+        logger.info("Loaded HPO ontology from release: %s", release)
+        return ontology
+
+    ontology = store.load_minimal_hpo()
+    logger.info("Loaded HPO ontology from the latest available release.")
+    return ontology
+   
+    
