@@ -1,64 +1,30 @@
 # Synergy analysis
 
-After constructing a dataset, you can use the `SynergyAnalyzer` to identify pairs of HPO features that jointly provide more information about a target variable than individual features alone.
+After constructing a dataset, the `SynergyAnalyzer` identifies pairs of HPO features that jointly provide more information about a target variable than individual features alone.
 
-Synergy analysis in **ppkt2synergy** is based on mutual information and permutation testing.
+## What is synergy?
+
+Synergy quantifies whether a **pair of HPO features provides more information about a target** than expected from their individual contributions alone.
+
+* **Positive synergy** → the combination of two features is more informative than each one separately  
+* **Zero synergy** → the features provide independent information  
+* **Negative synergy** → the features are redundant with respect to the target  
+
+In ppkt2synergy, synergy is computed using **mutual information** to capture dependencies between features and the target, and **permutation testing** to assess statistical significance.  
+
+This allows identification of **feature interactions** that are specifically relevant to a disease, variant, or cohort, beyond simple pairwise co-occurrence.
 
 ---
 
 ## Check available targets
 
-Before running synergy analysis, it is useful to inspect which targets are available in the dataset.
+Before running synergy analysis, inspect available targets:
 
 ```python
-available_targets = dataset_multi.describe_available_targets()
-available_targets
+dataset_multi.describe_available_targets()
 ```
 
-Example output:
-
-```python
-{
-  "built_targets": {
-    "disease": {
-      "available_target_names": [
-        "Congenital heart defects, multiple types, 8, with or without heterotaxy",
-        "Loeys-Dietz syndrome 1",
-        "Loeys-Dietz syndrome 2",
-        "Loeys-Dietz syndrome 3",
-        "Loeys-Dietz syndrome 4",
-        "Loeys-Dietz syndrome 5",
-        "Loeys-Dietz syndrome 6",
-        "Multiple self-healing squamous epithelioma, susceptibility to"
-      ]
-    },
-    "variant_condition": {
-      "available_target_names": [
-        "missense_variant"
-      ]
-    }
-  },
-  "metadata_targets": {
-    "sex": {
-      "available_positive_classes": [
-        "female",
-        "male",
-        "unknown"
-      ]
-    },
-    "cohort": {
-      "available_positive_classes": [
-        "SMAD2",
-        "SMAD3",
-        "TGFB2",
-        "TGFB3",
-        "TGFBR1",
-        "TGFBR2"
-      ]
-    }
-  }
-}
-```
+This returns **built targets** (e.g., `disease`, `variant_condition`) and **metadata-derived targets** (e.g., `cohort`, `sex`), along with their available classes.
 
 This summary helps determine which targets can be used in synergy analysis.
 
@@ -77,27 +43,37 @@ synergy_analyzer = SynergyAnalyzer(
 )
 ```
 
----
+### Key parameters
 
-## What the analyzer computes
+#### `n_permutations`
 
-For each valid pair of HPO terms, the analyzer computes:
+Controls the number of permutations used for p-value estimation.
 
-* a synergy score
-* a permutation-based p-value
-* a multiple-testing corrected p-value
+```python
+n_permutations=1000
+```
 
-The synergy score quantifies whether two HPO features jointly provide more information about a target than expected from their individual contributions.
+Higher values give more stable p-value estimates, but increase runtime.
+
+
+#### `min_individuals_for_synergy_calculation`
+
+Minimum number of valid individuals required for evaluating a pair of HPO terms.
+
+```python
+min_individuals_for_synergy_calculation=40
+```
+
+Higher values make the analysis more conservative by requiring more support for each pair. Lower values allow more HPO term pairs to be tested, but may lead to less stable estimates in sparse datasets.
+
+This parameter should be chosen in relation to cohort size and the amount of missing data.
 
 ---
 
 ## Target selection
 
-Synergy analysis requires a **binary target**.
+Synergy analysis requires a **binary target**. There are two ways to specify the target:
 
-There are two ways to specify the target:
-
----
 
 ### 1. Built targets
 
@@ -130,7 +106,6 @@ synergy_results = synergy_analyzer.compute_synergy_matrix(
 
 Use this mode when the target already exists as a pre-built column in the dataset.
 
----
 
 ### 2. Metadata-derived targets
 
@@ -160,7 +135,7 @@ This creates a binary target where:
 
 ---
 
-## Important requirement: target variation
+### Important requirement: target variation
 
 Synergy analysis requires both positive and negative target values.
 
@@ -176,67 +151,6 @@ Examples:
 * If all phenopackets come from a single cohort, using `target_type="cohort"` is not informative
 * If all loaded samples correspond to a single disease, using that disease as a target is not possible
 * If a variant-condition target contains only positives or only negatives, it cannot be used for synergy analysis
-
----
-
-## Key parameters
-
-### `n_permutations`
-
-Controls the number of permutations used for p-value estimation.
-
-```python
-n_permutations=1000
-```
-
-Higher values give more stable p-value estimates, but increase runtime.
-
----
-
-### `min_individuals_for_synergy_calculation`
-
-Minimum number of valid individuals required for evaluating a pair of HPO terms.
-
-```python
-min_individuals_for_synergy_calculation=40
-```
-
-Higher values make the analysis more conservative by requiring more support for each pair. Lower values allow more HPO term pairs to be tested, but may lead to less stable estimates in sparse datasets.
-
-This parameter should be chosen in relation to cohort size and the amount of missing data.
-
----
-
-### `include_pmids`
-
-If enabled, PMIDs associated with contributing individuals are aggregated and included in the result table.
-
-```python
-include_pmids=True
-```
-
-This can help interpretation, but may increase output size.
-
----
-
-## Output
-
-The computed results are returned as a table containing, for each HPO term pair:
-
-* HPO identifiers
-* optional HPO labels
-* synergy score
-* raw p-value
-* corrected p-value
-* contingency counts stratified by target value
-* number of contributing individuals
-* optional PMID information
-
-Example:
-
-```python
-synergy_results.head()
-```
 
 ---
 
@@ -279,16 +193,16 @@ synergy_analyzer.save_synergy_heatmap(
 
 ---
 
-## Thresholds for filtering
+### Thresholds for filtering
 
-### `synergy_threshold`
+#### `synergy_threshold`
 
 Minimum synergy value to retain.
 
 * higher values keep only stronger interactions
 * lower values retain more HPO term pairs
 
-### `adj_pval_threshold`
+#### `adj_pval_threshold`
 
 Maximum corrected p-value to retain.
 
@@ -311,5 +225,4 @@ A stricter threshold retains only more strongly supported interactions, while a 
 ## Next steps
 
 After identifying informative HPO feature pairs, you can compare synergy patterns across different targets or datasets.
-
 You may also combine synergy analysis with correlation analysis to distinguish pairwise association from target-dependent interaction.

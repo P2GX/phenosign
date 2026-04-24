@@ -1,8 +1,8 @@
 # Build dataset
 
-After loading phenopackets, the next step is to construct an analysis-ready dataset.
+After loading phenopackets, the next step is to construct an **analysis-ready dataset**.  
 
-The `PhenotypeDatasetBuilder` transforms raw phenopackets into a structured dataset that can be used for correlation and synergy analysis.
+The `PhenotypeDatasetBuilder` transforms raw phenopackets into a structured dataset suitable for **correlation** and **synergy** analysis.
 
 ---
 
@@ -15,21 +15,21 @@ from gpsea.model import VariantEffect
 builder = PhenotypeDatasetBuilder(phenopackets_multi)
 
 dataset = builder.build(
-    mane_tx_id=['NM_004612.4','NM_003242.6','NM_005902.4'],
+    mane_tx_id=['NM_004612.4', 'NM_003242.6', 'NM_005902.4'],
     variant_effect_type=VariantEffect.MISSENSE_VARIANT,
     missing_threshold=0.9
 )
 ```
 
----
-
-## What happens during dataset construction
-
-The resulting dataset consists of three main components:
+This constructs a dataset containing HPO feature matrices, target variables, and individual metadata.
 
 ---
 
-### HPO feature data
+### Dataset components
+
+The resulting dataset has three main components:
+
+#### HPO feature data
 
 A binary feature matrix is always constructed, representing the presence or absence of HPO terms across individuals.
 
@@ -37,47 +37,44 @@ A binary feature matrix is always constructed, representing the presence or abse
 * **0** → explicitly excluded
 * **NaN** → unknown
 
-The feature matrix is stored in a structured object:
+Stored as:
 
 ```python
 dataset.hpo_data.matrix
 ```
 
-Rows correspond to individuals, and columns correspond to HPO terms.
-
-Additional information may include:
+Rows correspond to individuals, and columns correspond to HPO terms. Additional information may include:
 
 * mapping from HPO IDs to labels
 * relationships between HPO terms (e.g., hierarchical structure)
 
 ---
 
-### Target variables
+#### Target variables
 
-Target variables define the outcome used in downstream analysis.
+Target variables define the outcomes for downstream analysis.
 
-#### Disease target (always available)
+##### Disease target (always available)
 
-A disease-based target is always constructed from the input phenopackets.
+A disease-based target is automatically constructed from input phenopackets and can be used for association or stratification analysis.
 
-This can be used for association or stratification analyses.
+Accessible via:
+```python
+dataset.target_data.disease
+```
 
----
-
-#### Variant condition target (optional)
+##### Variant condition target (optional)
 
 If both `mane_tx_id` and `variant_effect_type` are provided, the builder constructs a **binary variant-condition target**.
 
 * **1** → individual matches the specified variant condition
 * **0** → individual does not match
 
-This target is typically used for **synergy analysis**.
-
-Multiple transcript IDs can be provided and are combined into a single condition.
+Multiple transcript IDs can be combined into a single target. This target is typically used in **synergy analysis**.
 
 ---
 
-### Individual metadata
+#### Individual metadata
 
 Metadata are constructed for each individual, including:
 
@@ -86,7 +83,7 @@ Metadata are constructed for each individual, including:
 * age
 * associated publications (PMIDs)
 
-These metadata can be used for filtering, grouping, or downstream analysis.
+Accessible via:
 
 ```python
 dataset.individual_metadata
@@ -94,9 +91,9 @@ dataset.individual_metadata
 
 ---
 
-## Parameters
+### Key Parameters
 
-### `mane_tx_id`
+#### `mane_tx_id`
 
 Defines the MANE transcript(s) used for constructing the variant-condition target.
 
@@ -114,9 +111,9 @@ mane_tx_id = ["NM_004612.4", "NM_003242.6"]
 
 ---
 
-### `variant_effect_type`
+#### `variant_effect_type`
 
-Defines the variant effect used for classification, for example:
+Defines the variant effect type to consider:
 
 ```python
 VariantEffect.MISSENSE_VARIANT
@@ -124,20 +121,20 @@ VariantEffect.MISSENSE_VARIANT
 
 ---
 
-### `missing_threshold`
+#### `missing_threshold`
 
 Controls filtering of HPO terms based on missingness:
 
-* values close to **1.0** → keep most features
+* values close to **1.0** → keep all features
 * lower values → remove features with high missing rates
 
 ---
 
-## Advanced: HPO configuration
+## Advanced: Custom HPO configuration
 
 By default, the HPO ontology is loaded automatically.
 
-You can optionally specify a custom HPO file or release:
+You can specify a custom HPO ontology file or release for reproducibility:
 
 ```python
 builder = PhenotypeDatasetBuilder(
@@ -147,23 +144,22 @@ builder = PhenotypeDatasetBuilder(
 )
 ```
 
-This is useful for reproducibility or when working with a local ontology file.
-
 ---
 
 ## Advanced: restricting the feature space to a reference cohort
 
-In some analyses, it can be useful to evaluate a target across the full dataset while restricting the HPO feature space to terms observed in a specific reference cohort.
-
-For example, the full dataset can be aligned to the HPO terms observed in the `FBN1` cohort:
+Sometimes it is useful to evaluate a target on the full dataset while restricting features to those observed in a reference cohort:
 
 ```python
+# Load full dataset
 phenopackets_all = load_phenopackets_by_cohort()
 dataset_all = PhenotypeDatasetBuilder(phenopackets_all).build(missing_threshold=1.0)
 
+# Load reference cohort
 phenopackets_fbn1 = load_phenopackets_by_cohort(cohorts="FBN1")
 dataset_fbn1 = PhenotypeDatasetBuilder(phenopackets_fbn1).build(missing_threshold=1.0)
 
+# Restrict features to those in reference cohort
 dataset_all.hpo_data.matrix = dataset_all.hpo_data.matrix[
     dataset_fbn1.hpo_data.matrix.columns
 ]
@@ -174,15 +170,13 @@ dataset_all.hpo_data.relationship_mask = dataset_all.hpo_data.relationship_mask.
 ]
 ```
 
-This setup defines a condition-specific feature space:
+This ensures:
 
-* the **population** is the full dataset
-* the **target** can represent membership in a specific cohort (e.g. `FBN1` vs others)
-* the **features** are restricted to HPO terms observed in the reference cohort
+* the **population** -> full dataset
+* the **target** -> membership in a specific cohort (e.g. `FBN1` vs others)
+* the **features** -> restricted to HPO terms observed in the reference cohort
 
-This can be useful when the goal is to study interactions among phenotype features that are specifically relevant to one condition, while still evaluating them against a broader background population.
-
-Using the corresponding relationship mask ensures that the ontology-aware filtering remains consistent after restricting the feature space.
+Ontology-aware filtering remains consistent by using the corresponding relationship mask.
 
 ---
 
@@ -197,7 +191,7 @@ Using the corresponding relationship mask ensures that the ontology-aware filter
 
 ## Next steps
 
-Once the dataset has been constructed, you can perform downstream analysis.
+After constructing the dataset, proceed to:
 
-* See **Correlation analysis** to explore pairwise relationships between HPO terms
-* See **Synergy analysis** to identify higher-order interactions
+* See **Correlation analysis** -> explore pairwise relationships between HPO terms
+* See **Synergy analysis** -> identify higher-order interactions

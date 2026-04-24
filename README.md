@@ -1,42 +1,12 @@
 # ppkt2synergy
 
-**ppkt2synergy** is a Python package for correlation and synergy analysis of Human Phenotype Ontology (HPO) annotations in GA4GH phenopacket cohorts.
-
+**ppkt2synergy** is a Python library for analyzing correlations and synergy in [GA4GH Phenopacket](https://www.ga4gh.org/product/phenopackets/) cohorts. 
 ---
 
 ## Installation
 
 ```bash
 pip install ppkt2synergy
-```
-
----
-
-## Example
-
-```python
-from ppkt2synergy import (
-    load_phenopackets_by_cohort,
-    PhenotypeDatasetBuilder,
-    HPOCorrelationAnalyzer,
-    CorrelationType,
-)
-from gpsea.model import VariantEffect
-
-# Load phenopackets
-phenopackets = load_phenopackets_by_cohort("FBN1")
-
-# Build dataset
-dataset = PhenotypeDatasetBuilder(phenopackets).build(
-    mane_tx_id="NM_000138.5",
-    variant_effect_type=VariantEffect.MISSENSE_VARIANT,
-)
-
-# Run correlation analysis
-analyzer = HPOCorrelationAnalyzer(dataset)
-analyzer.compute_correlation_matrix(
-    correlation_type=CorrelationType.SPEARMAN
-)
 ```
 
 ---
@@ -60,12 +30,27 @@ This package enables the identification of pairwise associations and higher-orde
 ## Quickstart
 
 ```python
-from ppkt2synergy import SynergyAnalyzer
+from ppkt2synergy import (
+    load_phenopackets_by_cohort,
+    PhenotypeDatasetBuilder,
+    HPOCorrelationAnalyzer,
+    CorrelationType,
+)
+from gpsea.model import VariantEffect
 
-synergy = SynergyAnalyzer(dataset)
-synergy.compute_synergy_matrix(
-    target_type="variant_condition",
-    target_name="missense_variant"
+# Load phenopackets
+phenopackets = load_phenopackets_by_cohort("FBN1")
+
+# Build dataset
+dataset = PhenotypeDatasetBuilder(phenopackets).build(
+    mane_tx_id="NM_000138.5",
+    variant_effect_type=VariantEffect.MISSENSE_VARIANT,
+)
+
+# Run correlation analysis
+analyzer = HPOCorrelationAnalyzer(dataset)
+analyzer.compute_correlation_matrix(
+    correlation_type=CorrelationType.SPEARMAN
 )
 ```
 
