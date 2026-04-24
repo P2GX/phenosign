@@ -39,11 +39,11 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: ["src"]  
+          paths: ["src"] 
 
 nav:
   - Home: index.md
-  - Setup: setup.md
+  - Installation: installation.md
   - Tutorial: tutorial.md
   - Internal: internal.md
   - Usage:

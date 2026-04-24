@@ -1,51 +1,47 @@
 # Load phenopackets
 
-Loading phenopacket data is the first step of any analysis workflow in **ppkt2synergy**.
+Loading phenopacket data is the first step in any **ppkt2synergy** workflow. The package provides convenient functions to retrieve phenopackets from the **Phenopacket Store** (see [here](https://github.com/monarch-initiative/phenopacket-store)), based on:
 
-The package provides convenient functions to load phenopackets from a phenopacket store based on:
+* **Cohort identifiers** (e.g., gene-based cohorts)  
+* **Disease identifiers** (e.g., OMIM IDs)
 
-* cohort identifiers (e.g., gene-based cohorts)
-* disease identifiers (e.g., OMIM IDs)
-
-Before loading data, ensure that the requested cohort or disease exists in the phenopacket store.
+Before loading data, ensure that the requested cohort or disease exists in the [Phenopacket Store](https://github.com/monarch-initiative/phenopacket-store).
 
 ---
 
 ## Load by cohort
 
-### Load a single cohort
+### Single cohort
 
 ```python
 from ppkt2synergy import load_phenopackets_by_cohort
 
 phenopackets = load_phenopackets_by_cohort("TGFBR1")
-print(len(phenopackets))
+print(f"Loaded {len(phenopackets)} phenopackets")
 ```
 
 Loads phenopackets associated with a single cohort (e.g., a gene-based cohort).
 
 ---
 
-### Load multiple cohorts
+### Multiple cohorts
 
 ```python
-multi_cohort_names = [
-    "TGFBR1", "TGFBR2", "SMAD3", "TGFB2", "TGFB3", "SMAD2"
-]
+multi_cohort_names = ["TGFBR1", "TGFBR2", "SMAD3", "TGFB2", "TGFB3", "SMAD2"]
 
 phenopackets_multi = load_phenopackets_by_cohort(multi_cohort_names)
-print(len(phenopackets_multi))
+print(f"Loaded {len(phenopackets_multi)} phenopackets from multiple cohorts")
 ```
 
-Combines phenopackets from multiple cohorts into a single list.
+Combines phenopackets from multiple cohorts into a single list for aggregated analysis.
 
 ---
 
-### Load all cohorts
+### All cohorts
 
 ```python
 phenopackets_all = load_phenopackets_by_cohort()
-print(len(phenopackets_all))
+print(f"Loaded {len(phenopackets_all)} phenopackets from all available cohorts")
 ```
 
 Loads all available phenopackets in the store.
@@ -54,20 +50,20 @@ Loads all available phenopackets in the store.
 
 ## Load by disease
 
-### Load a single disease
+### Single disease
 
 ```python
 from ppkt2synergy import load_phenopackets_by_disease
 
 phenopackets_disease = load_phenopackets_by_disease("OMIM:614816")
-print(len(phenopackets_disease))
+print(f"Loaded {len(phenopackets_disease)} phenopackets for the disease OMIM:614816")
 ```
 
 Retrieves phenopackets associated with a specific disease identifier.
 
 ---
 
-### Load multiple diseases
+### Multiple diseases
 
 ```python
 phenopackets_diseases = load_phenopackets_by_disease([
@@ -75,19 +71,16 @@ phenopackets_diseases = load_phenopackets_by_disease([
     "OMIM:610168",
     "OMIM:609192"
 ])
-
-print(len(phenopackets_diseases))
+print(f"Loaded {len(phenopackets_diseases)} phenopackets across multiple diseases")
 ```
 
-Aggregates phenopackets across multiple diseases.
+Aggregates phenopackets for several diseases into a single collection.
 
 ---
 
 ## Specify Phenopacket Store version
 
-By default, the latest available release of the Phenopacket Store is used.
-
-You can specify a particular release version using the ppkt_store_version argument:
+By default, **ppkt2synergy** uses the latest available release of the Phenopacket Store. To ensure reproducibility, you can specify a particular version with the ppkt_store_version argument:
 
 ```python
 phenopackets = load_phenopackets_by_cohort(
@@ -96,20 +89,16 @@ phenopackets = load_phenopackets_by_cohort(
 )
 ```
 
-This ensures reproducibility when working with a fixed dataset version.
-
 ---
 
 ## Notes
 
-* Cohort-based loading is typically used for gene-centered analysis
-* Disease-based loading supports condition-level aggregation
-* The returned objects can be used directly for downstream analysis
+* **Cohort-based** loading is ideal for gene-centered analyses.
+* **Disease-based** loading allows aggregation at the condition level.
+* The returned phenopacket objects can be used directly for downstream processing, such as building feature matrices and target variables.
 
 ---
 
 ## Next steps
 
-After loading phenopackets, the next step is to construct a dataset suitable for analysis.
-
-See **Build dataset** for how to transform phenopackets into feature matrices and target variables.
+Once phenopackets are loaded, proceed to **Build dataset** to transform raw phenotypic data into structured matrices suitable for correlation and synergy analysis.

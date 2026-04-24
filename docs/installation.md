@@ -1,4 +1,4 @@
-# Setup
+# Installation
 
 ## Install from PyPI (recommended)
 
@@ -8,8 +8,8 @@ pip install ppkt2synergy
 
 ---
 
-## Install from source (development)
-Create a virtual environment in the directory you will work in, 
+## Install from GitHub 
+To install the development version directly from GitHub, first create a virtual environment: 
 
 ```bash
 python3 -m venv venv
@@ -17,6 +17,7 @@ source venv/bin/activate
 pip install --upgrade pip
 ```
 
+Then clone the repository and install in editable mode:
 ```bash
 git clone https://github.com/P2GX/ppkt2synergy.git
 cd ppkt2synergy

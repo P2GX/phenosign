@@ -1,12 +1,24 @@
 # Correlation analysis
 
-Once a dataset has been constructed, pairwise associations between HPO terms can be quantified using the `HPOCorrelationAnalyzer`.
+Once a dataset has been constructed, pairwise associations between HPO terms can be quantified using the `HPOCorrelationAnalyzer`.`
+
+## What is correlation?
+
+Correlation quantifies the **degree of association** between two variables.  
+In the context of HPO features:
+
+* **Positive correlation** → two phenotypes tend to appear together in the same individuals  
+* **Negative correlation** → two phenotypes tend to occur in mutually exclusive individuals  
+* **Values near zero** → little or no association  
 
 The analyzer supports three correlation measures:
 
-* `CorrelationType.SPEARMAN`
-* `CorrelationType.KENDALL`
+* `CorrelationType.SPEARMAN`  
+* `CorrelationType.KENDALL`  
 * `CorrelationType.PHI`
+
+* **Spearman / Kendall** → measure how consistently the presence/absence of one feature ranks relative to another across individuals. Useful when you want a general sense of monotonic association, even with sparse binary data.  
+* **Phi coefficient** → specifically designed for binary data, directly measuring co-occurrence (both 1s) and mutual exclusivity (1 vs 0) between two features.
 
 ---
 
@@ -34,9 +46,9 @@ This computes pairwise correlations between HPO terms and returns a results tabl
 
 ---
 
-## What the analyzer uses
+### Input data
 
-Correlation analysis is performed on the HPO feature matrix stored in:
+Correlation analysis is performed on the HPO feature matrix:
 
 ```python
 dataset.hpo_data.matrix
@@ -52,39 +64,11 @@ Only HPO term pairs with enough valid individuals are evaluated.
 
 ---
 
-## Correlation types
+### Key parameters
 
-### Spearman correlation
+#### `min_individuals_for_correlation_test`
 
-```python
-CorrelationType.SPEARMAN
-```
-
-A rank-based correlation measure. This is often a good default choice.
-
-### Kendall correlation
-
-```python
-CorrelationType.KENDALL
-```
-
-A rank-based alternative that may be more conservative.
-
-### Phi coefficient
-
-```python
-CorrelationType.PHI
-```
-
-A correlation measure designed for binary variables.
-
----
-
-## Key parameters
-
-### `min_individuals_for_correlation_test`
-
-This parameter controls the minimum number of individuals with non-missing values for both HPO terms in a pair.
+Minimum number of individuals with non-missing values required for a pairwise test:
 
 ```python
 min_individuals_for_correlation_test=30
@@ -96,7 +80,7 @@ In practice, this parameter should be chosen with respect to cohort size and the
 
 ---
 
-### `min_cooccurrence_count`
+#### `min_cooccurrence_count`
 
 This parameter controls the minimum number of shared `0/0` observations required before a feature pair is considered for correlation testing.
 
@@ -108,35 +92,12 @@ This helps exclude pairs with insufficient joint support.
 
 ---
 
-### `include_pmids`
+#### `include_pmids`
 
 If enabled, PMIDs associated with contributing individuals are aggregated and included in the result table.
 
 ```python
 include_pmids=True
-```
-
-This can be useful for interpretation, but may increase output size.
-
----
-
-## Output
-
-The computed results are returned as a table containing, for each HPO term pair:
-
-* HPO identifiers
-* optional HPO labels
-* correlation coefficient
-* raw p-value
-* corrected p-value
-* contingency counts (`00`, `01`, `10`, `11`)
-* number of contributing individuals
-* optional PMID information
-
-Example:
-
-```python
-results.head()
 ```
 
 ---
@@ -152,25 +113,6 @@ analyzer.save_correlation_results(
     output_file="correlation_results_Loeys-Dietz syndrome.csv",
 )
 ```
-
----
-
-## Thresholds for result filtering
-
-### `abs_threshold`
-
-Minimum absolute correlation coefficient to retain.
-
-* higher values keep only stronger associations
-* lower values retain more pairs
-
-### `adj_pval_threshold`
-
-Maximum corrected p-value to retain.
-
-The analyzer applies multiple-testing correction using the Benjamini-Hochberg procedure and stores the corrected values in `p_value_corrected`.
-
-A stricter threshold retains only more statistically supported pairs, while a more relaxed threshold can be useful during exploratory analysis.
 
 ---
 
@@ -200,6 +142,25 @@ analyzer.save_correlation_heatmap(
 
 ---
 
+### Thresholds for result filtering
+
+#### `abs_threshold`
+
+Minimum absolute correlation coefficient to retain.
+
+* higher values keep only stronger associations
+* lower values retain more pairs
+
+#### `adj_pval_threshold`
+
+Maximum corrected p-value to retain.
+
+The analyzer applies multiple-testing correction using the Benjamini-Hochberg procedure and stores the corrected values in `p_value_corrected`.
+
+A stricter threshold retains only more statistically supported pairs, while a more relaxed threshold can be useful during exploratory analysis.
+
+---
+
 ## Notes
 
 * Correlation analysis requires variation in the HPO feature matrix; both `1` and `0` values must be present
@@ -211,6 +172,4 @@ analyzer.save_correlation_heatmap(
 
 ## Next steps
 
-After identifying pairwise phenotype associations, you can explore higher-order interactions.
-
-See **Synergy analysis** to quantify combinations of HPO features with respect to a target variable.
+After identifying pairwise associations, explore higher-order interactions with **Synergy analysis**.
