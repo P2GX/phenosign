@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .term_manager import HPOTermManager
+from ._term_manager import HPOTermManager
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +18,14 @@ class HPOHierarchyEngine:
     the HPO hierarchy, as well as construction of relationship masks for
     pairwise analyses.
 
-    Notes
-    -----
+    .. note::
+
     Input matrices are expected to use:
+    
         1 = observed
         0 = excluded
         NaN = unknown
+
     Invalid HPO terms are removed during preprocessing.
 
     If multiple input columns map to the same canonical HPO ID,
@@ -41,8 +43,12 @@ class HPOHierarchyEngine:
         hpo_file: str | IO | None = None,
         release: str | None = None,
     ) -> None:
-        self.term_manager = HPOTermManager(hpo_file=hpo_file, release=release)
-
+        self._term_manager = HPOTermManager(hpo_file=hpo_file, release=release)
+        
+    @property
+    def hpo(self):
+        """Direct access to underlying HPO ontology (read-only)."""
+        return self._term_manager.hpo
 
     def propagate(
         self, 
@@ -67,9 +73,9 @@ class HPOHierarchyEngine:
         matrix = matrix.copy()
 
         original_terms = set(matrix.columns)
-        valid_terms = self.term_manager.prepare_terms(original_terms)
+        valid_terms = self._term_manager.prepare_terms(original_terms)
 
-        id_mapping = self.term_manager.get_id_mapping()
+        id_mapping = self._term_manager.get_id_mapping()
         matrix = matrix.rename(columns=id_mapping)
 
         matrix = matrix.loc[:, matrix.columns.isin(valid_terms)]
@@ -79,8 +85,8 @@ class HPOHierarchyEngine:
         valid_term_set = set(valid_terms)
 
         for term in valid_terms:
-            ancestors = self.term_manager.get_ancestors(term) & valid_term_set
-            descendants = self.term_manager.get_descendants(term) & valid_term_set
+            ancestors = self._term_manager.get_ancestors(term) & valid_term_set
+            descendants = self._term_manager.get_descendants(term) & valid_term_set
 
             observed_mask = matrix[term] == 1
             if observed_mask.any():
@@ -133,35 +139,31 @@ class HPOHierarchyEngine:
             related terms (ancestor, descendant, or self) and ``0`` indicates
             unrelated terms.
 
-        Notes
-        -----
+        .. note::
+
         This mask can be used to exclude ontology-related term pairs from
         pairwise correlation or synergy analyses.
         """
         terms = list(terms)
+        term_to_idx = {t: i for i, t in enumerate(terms)}
+        N = len(terms)
+        mask = np.zeros((N, N), dtype=float)
 
-        mask = pd.DataFrame(0.0, index=terms, columns=terms)
+        for i, term in enumerate(terms):
+            related = self._term_manager.get_ancestors(term) | self._term_manager.get_descendants(term)
+            related_idx = [term_to_idx[t] for t in related if t in term_to_idx]
+            mask[i, related_idx] = np.nan
+            mask[related_idx, i] = np.nan
+            mask[i, i] = np.nan
 
-        term_set = set(terms)
-        for term in terms:
-            related = (
-                self.term_manager.get_ancestors(term)
-                | self.term_manager.get_descendants(term)
-            ) & term_set
-
-            for related_term in related:
-                mask.loc[term, related_term] = np.nan
-                mask.loc[related_term, term] = np.nan
-
-            mask.loc[term, term] = np.nan
-
-        return mask
+        mask_df = pd.DataFrame(mask, index=terms, columns=terms)
+        return mask_df
     
 
     def get_labels(self) -> dict[str, str]:
         """Return cached HPO term labels."""
-        return self.term_manager.get_labels()
+        return self._term_manager.get_labels()
 
     def get_id_mapping(self) -> dict[str, str]:
         """Return cached mapping from original to canonical HPO term IDs."""
-        return self.term_manager.get_id_mapping()
+        return self._term_manager.get_id_mapping()

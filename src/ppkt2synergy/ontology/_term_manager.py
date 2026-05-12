@@ -35,12 +35,21 @@ class HPOTermManager:
             HPO release identifier. If ``None``, the latest available
             release is used.
         """
-        self.hpo = load_hpo(file=hpo_file, release=release)
+        self._hpo = load_hpo(file=hpo_file, release=release)
 
         self._ancestor_cache: dict[str, set[str]] = {}
         self._descendant_cache: dict[str, set[str]] = {}
         self._label_cache: dict[str, str] = {}
         self._id_mapping_cache: dict[str, str] = {}
+
+    @property
+    def hpo(self):
+        """
+        Return the underlying HPO ontology object (read-only).
+
+        Advanced/internal use only.
+        """
+        return self._hpo
 
     def resolve_term_id(
         self, 
@@ -64,7 +73,7 @@ class HPOTermManager:
         ValueError
             If the term ID is not found in the ontology.
         """
-        term = self.hpo.get_term(term_id=term_id)
+        term = self._hpo.get_term(term_id=term_id)
         if term is None:
             raise ValueError(f"Term ID '{term_id}' not found in HPO ontology.")
         return term.identifier.value
@@ -100,7 +109,7 @@ class HPOTermManager:
                 self._id_mapping_cache[term] = primary_id
 
                 if primary_id not in self._label_cache:
-                    self._label_cache[primary_id] = self.hpo.get_term(term_id=primary_id).name
+                    self._label_cache[primary_id] = self._hpo.get_term(term_id=primary_id).name
 
             except ValueError as exc:
                 logger.warning("%s Skipping term %r", exc, term)
@@ -110,7 +119,7 @@ class HPOTermManager:
         for term in new_terms:
             try:
                 self._ancestor_cache[term] = {
-                    ancestor.value for ancestor in self.hpo.graph.get_ancestors(term)
+                    ancestor.value for ancestor in self._hpo.graph.get_ancestors(term)
                 }
             except Exception as exc:
                 logger.warning("Failed to fetch ancestors for %r: %s", term, exc)
@@ -118,7 +127,7 @@ class HPOTermManager:
 
             try:
                 self._descendant_cache[term] = {
-                    descendant.value for descendant in self.hpo.graph.get_descendants(term)
+                    descendant.value for descendant in self._hpo.graph.get_descendants(term)
                 }
             except Exception as exc:
                 logger.warning("Failed to fetch descendants for %r: %s", term, exc)

@@ -113,7 +113,7 @@ def test_init_with_raw_phenopackets(monkeypatch, records):
 
     assert builder.raw_phenopackets == phenopackets
     assert builder.records == records
-    assert isinstance(builder.hpo_hierarchy, DummyHierarchyEngine)
+    assert isinstance(builder._hpo_engine, DummyHierarchyEngine)
 
 
 def test_init_with_enriched_phenopackets(monkeypatch, records):
@@ -131,7 +131,7 @@ def test_init_with_enriched_phenopackets(monkeypatch, records):
 
     assert [p.id for p in builder.raw_phenopackets] == ["P1", "P2"]
     assert builder.records == records
-    assert isinstance(builder.hpo_hierarchy, DummyHierarchyEngine)
+    assert isinstance(builder._hpo_engine, DummyHierarchyEngine)
 
 
 def test_init_with_mixed_input_raises(monkeypatch):

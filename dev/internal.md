@@ -10,17 +10,21 @@ These pages are generated with mkdocs.
 
 To set things up, perform the following steps (substitute name of venv if needed).
 
-```
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install -e .[docs]
 ```
 
-To start a local server, enter:
+Then build the docs:
+```bash
+cd docs
+make html
 ```
-mkdocs serve
-```
+
+Open:
+docs/build/html/index.html
  
 
 # PyPI release
