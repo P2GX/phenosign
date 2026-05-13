@@ -168,3 +168,7 @@ cython_debug/
 .idea/
 **/.gpsea_cache/
 docs/api/
+
+docs/build/
+docs/source/.ipynb_checkpoints/
+docs/source/.gpsea_cache/

@@ -24,7 +24,7 @@ class SynergyAnalyzer:
     def __init__(
         self, 
         dataset: PhenotypeDataset, 
-        n_permutations: int = 100,
+        n_permutations: int = 1000,
         min_individuals_for_synergy_calculation: int = 40, 
         random_state: int = 42,
     ):
@@ -33,7 +33,7 @@ class SynergyAnalyzer:
         ----------
         dataset : PhenotypeDataset
             Analysis-ready dataset containing HPO features, targets, and metadata.
-        n_permutations : int, default=100
+        n_permutations : int, default=1000
             Number of permutations used to estimate p-values.
         min_individuals_for_synergy_calculation : int, default=40
             Minimum number of valid individuals required to evaluate a feature pair.
@@ -205,9 +205,7 @@ class SynergyAnalyzer:
 
     def compute_synergy_matrix(
         self, 
-        target_type: str,
-        target_name: str | None = None,
-        positive_class=None,
+        condition: pd.Series,
         n_jobs=-1,
         include_pmids: bool = True
     ) -> pd.DataFrame:
@@ -216,12 +214,13 @@ class SynergyAnalyzer:
 
         Parameters
         ----------
-        target_type : str
-            Target type to analyze.
-        target_name : str | None, optional
-            Target column name for built target matrices.
-        positive_class : str | None, optional
-            Positive class for metadata-derived targets.
+        condition : pd.Series
+            Boolean condition to filter the dataset.
+        n_jobs : int, default=-1
+            Number of parallel jobs. ``-1`` uses all available CPUs.
+        include_pmids : bool, default=True
+            If ``True``, aggregate PMIDs from contributing individuals and
+            include them in the result table.
         n_jobs : int, default=-1
             Number of parallel jobs. ``-1`` uses all available CPUs.
         include_pmids : bool, default=True
@@ -242,20 +241,15 @@ class SynergyAnalyzer:
             ... )
             >>> # Example 1: Disease target (pre-built matrix)
             >>> analyzer.compute_synergy(
-            ...     target_type="disease",
-            ...     target_name="OMIM:123456",  # disease column in target matrix
-            ...)
+            ...     condition= dataset["disease"] == "OMIM:123456"
+            ... )
             >>> # Example 2: Metadata target (binary from sample metadata)
             >>> analyzer.compute_synergy(
-            ...     target_type="sex",
-            ...     positive_class="female",)
+            ...     condition=dataset["sex"] == "female"
+            ... )
         """
-        target = self.dataset.get_target(
-            target_type=target_type,
-            target_name=target_name,
-            positive_class=positive_class,
-        )
-        self.y = target.to_numpy(copy=True)
+        self.condition = condition
+        self.y = condition.to_numpy(copy=True)
         
         has_y_one = np.any(self.y == 1)
         has_y_zero = np.any(self.y == 0)
@@ -385,8 +379,8 @@ class SynergyAnalyzer:
 
     def save_synergy_results(
         self, 
-        synergy_threshold: float = 0.0,
-        adj_pval_threshold: float = 1.0,
+        synergy_threshold: float = 0.01,
+        adj_pval_threshold: float = 0.3,
         output_file: str = "synergy_results.csv"
     ) -> None:
         """
@@ -394,9 +388,9 @@ class SynergyAnalyzer:
 
         Parameters
         ----------
-        synergy_threshold : float, default=0.0
+        synergy_threshold : float, default=0.01
             Minimum synergy value to retain.
-        adj_pval_threshold : float, default=1.0
+        adj_pval_threshold : float, default=0.3
             Maximum adjusted p-value to retain.
         output_file : str, default="synergy_results.csv"
             Output file path. Supported formats are ``.csv`` and ``.xlsx``.
@@ -429,17 +423,17 @@ class SynergyAnalyzer:
     
     def filter_weak_synergy(
         self, 
-        synergy_threshold: float = 0.08, 
-        adj_pval_threshold: float = 0.1
+        synergy_threshold: float = 0.01, 
+        adj_pval_threshold: float = 0.3
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Filter the synergy and p-value matrices by effect size and significance.
 
         Parameters
         ----------
-        synergy_threshold : float, default=0.08
+        synergy_threshold : float, default=0.01
             Minimum synergy value to retain.
-        adj_pval_threshold : float, default=0.1
+        adj_pval_threshold : float, default=0.3
             Maximum adjusted p-value to retain.
 
         Returns
@@ -519,21 +513,18 @@ class SynergyAnalyzer:
 
     def plot_synergy_heatmap(
             self, 
-            synergy_threshold: float = 0.08,
-            adj_pval_threshold: float = 0.1,
-            target_name: str = "",
+            synergy_threshold: float = 0.01,
+            adj_pval_threshold: float = 0.3,
         ) -> go.Figure:
         """
         Plot a heatmap of pairwise synergy values.
 
         Parameters
         ----------
-        synergy_threshold : float, default=0.08
+        synergy_threshold : float, default=0.01
             Minimum synergy value to display.
-        adj_pval_threshold : float, default=0.1
+        adj_pval_threshold : float, default=0.3
             Maximum adjusted p-value to display.
-        target_name : str, optional
-            Target name shown in the plot title.
 
         Returns
         -------
@@ -663,7 +654,7 @@ class SynergyAnalyzer:
                         "invalid_computation": "the synergy could not be computed for this HPO pair.",
                         "filtered_by_statistics": (
                             f"the synergy value did not pass the statistical filters "
-                            f"(|corr| >= {synergy_threshold} and adjusted p-value < {adj_pval_threshold})."
+                            f"(|synergy_threshold| >= {synergy_threshold} and adjusted p-value < {adj_pval_threshold})."
                         ),
                     }
                     reason_text = reason_map.get(status, f"{status}")
@@ -750,7 +741,7 @@ class SynergyAnalyzer:
         fig.update_layout(
             title=dict(
                 text=f"<b>Pairwise Synergy Heatmap of HPO Features</b><br>"
-                    f"<span style='font-size:0.8em'>With respect to {target_name}</span>",
+                    f"<span style='font-size:0.8em'>With respect to {self.condition.name}</span>",
                 x=0.5,
                 xanchor="center",
                 yanchor="top",

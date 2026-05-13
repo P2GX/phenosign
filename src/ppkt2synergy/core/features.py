@@ -18,12 +18,26 @@ class HpoFeatureData:
         Square mask over HPO terms with the same index and columns as
         ``matrix.columns``. Related term pairs are encoded as ``NaN``
         and unrelated pairs as ``0``.
+
+    Properties
+    ----------
+    feature_names : pd.Index
+        HPO term IDs (matrix columns).
+    sample_ids : pd.Index
+        Individual identifiers (matrix index).
     """
+
     matrix: pd.DataFrame
     label_mapping: dict[str, str] = field(default_factory=dict)
     relationship_mask: pd.DataFrame | None = None
 
     def __post_init__(self) -> None:
+        self._validate_matrix()
+        self._validate_label_mapping()
+        self._validate_relationship_mask()
+
+
+    def _validate_matrix(self) -> None:
         if not isinstance(self.matrix, pd.DataFrame):
             raise TypeError(f"`matrix` must be a pandas DataFrame, got {type(self.matrix).__name__}.")
         
@@ -61,7 +75,7 @@ class HpoFeatureData:
                 f"Found invalid values: {bad_vals[:10]}."
             )
         
-
+    def _validate_label_mapping(self) -> None:
         if not isinstance(self.label_mapping, dict):
             raise TypeError(
                 f"`label_mapping` must be a dict[str, str], got {type(self.label_mapping).__name__}."
@@ -73,7 +87,7 @@ class HpoFeatureData:
         ):
             raise TypeError("`label_mapping` must map strings to strings.")
         
-
+    def _validate_relationship_mask(self) -> None:
         if self.relationship_mask is None:
             return
 
@@ -84,14 +98,10 @@ class HpoFeatureData:
                 f"`relationship_mask` must be a pandas DataFrame, got {type(mask).__name__}."
             )
 
-        if not (
-            mask.index.equals(self.matrix.columns)
-            and mask.columns.equals(self.matrix.columns)
-        ):
-            raise ValueError(
-                "`relationship_mask` must have the same index and columns as "
-                "`matrix.columns`, in the same order."
-            )
+        if set(mask.index) != set(self.matrix.columns) or set(mask.columns) != set(self.matrix.columns):
+            raise ValueError("`relationship_mask` must contain the same HPO terms as matrix columns.")
+
+        mask = mask.loc[self.matrix.columns, self.matrix.columns]
 
         invalid_mask = ~mask.isin([0]) & mask.notna()
         if invalid_mask.any().any():
@@ -108,11 +118,11 @@ class HpoFeatureData:
             raise ValueError("`relationship_mask` must be symmetric.")
         
     @property
-    def feature_names(self) -> pd.Index:
-        """Return HPO feature names (matrix columns)."""
+    def feature_ids(self) -> pd.Index:
+        """HPO feature IDs (matrix columns)."""
         return self.matrix.columns
 
     @property
-    def sample_ids(self) -> pd.Index:
-        """Return sample IDs (matrix index)."""
+    def individual_ids(self) -> pd.Index:
+        """Individual IDs (matrix index)."""
         return self.matrix.index

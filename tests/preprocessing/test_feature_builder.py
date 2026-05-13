@@ -69,16 +69,16 @@ def test_init_empty_records_raises():
     engine = DummyHPOHierarchyEngine()
 
     with pytest.raises(ValueError) as excinfo:
-        HpoFeatureBuilder(records=[], hpo_hierarchy=engine)
+        HpoFeatureBuilder(hpo_observations =[], hpo_hierarchy=engine)
 
     assert "records cannot be empty" in str(excinfo.value)
 
 
 def test_build_raw_matrix_basic(record1, record2):
     engine = DummyHPOHierarchyEngine()
-    builder = HpoFeatureBuilder(records=[record1, record2], hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =[record1, record2], hpo_hierarchy=engine)
 
-    matrix = builder.build_raw_matrix()
+    matrix = builder._build_raw_matrix()
 
     assert isinstance(matrix, pd.DataFrame)
     assert list(matrix.index) == ["P1", "P2"]
@@ -95,9 +95,9 @@ def test_build_raw_matrix_basic(record1, record2):
 
 def test_build_raw_matrix_preserves_record_order(record2, record1):
     engine = DummyHPOHierarchyEngine()
-    builder = HpoFeatureBuilder(records=[record2, record1], hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =[record2, record1], hpo_hierarchy=engine)
 
-    matrix = builder.build_raw_matrix()
+    matrix = builder._build_raw_matrix()
 
     assert list(matrix.index) == ["P2", "P1"]
 
@@ -115,10 +115,10 @@ def test_build_raw_matrix_logs_conflicts_and_excluded_wins(caplog):
         age=None,
         metadata={},
     )
-    builder = HpoFeatureBuilder(records=[record], hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =[record], hpo_hierarchy=engine)
 
     with caplog.at_level("WARNING"):
-        matrix = builder.build_raw_matrix()
+        matrix = builder._build_raw_matrix()
 
     assert "conflicting HPO annotations" in caplog.text
     assert matrix.loc["P1", "HP:1"] == 0.0
@@ -128,7 +128,7 @@ def test_filter_by_missingness_invalid_threshold_low():
     matrix = pd.DataFrame({"HP:1": [1.0, np.nan]})
 
     with pytest.raises(ValueError) as excinfo:
-        HpoFeatureBuilder.filter_by_missingness(matrix, missing_threshold=-0.1)
+        HpoFeatureBuilder._filter_by_missingness(matrix, missing_threshold=-0.1)
 
     assert "missing_threshold must be between 0 and 1" in str(excinfo.value)
 
@@ -137,7 +137,7 @@ def test_filter_by_missingness_invalid_threshold_high():
     matrix = pd.DataFrame({"HP:1": [1.0, np.nan]})
 
     with pytest.raises(ValueError) as excinfo:
-        HpoFeatureBuilder.filter_by_missingness(matrix, missing_threshold=1.1)
+        HpoFeatureBuilder._filter_by_missingness(matrix, missing_threshold=1.1)
 
     assert "missing_threshold must be between 0 and 1" in str(excinfo.value)
 
@@ -150,7 +150,7 @@ def test_filter_by_missingness_threshold_one_keeps_all_columns():
         }
     )
 
-    filtered = HpoFeatureBuilder.filter_by_missingness(matrix, missing_threshold=1.0)
+    filtered = HpoFeatureBuilder._filter_by_missingness(matrix, missing_threshold=1.0)
 
     assert list(filtered.columns) == ["HP:1", "HP:2"]
 
@@ -164,7 +164,7 @@ def test_filter_by_missingness_threshold_zero_keeps_only_complete_columns():
         }
     )
 
-    filtered = HpoFeatureBuilder.filter_by_missingness(matrix, missing_threshold=0.0)
+    filtered = HpoFeatureBuilder._filter_by_missingness(matrix, missing_threshold=0.0)
 
     assert list(filtered.columns) == ["HP:1"]
 
@@ -178,7 +178,7 @@ def test_filter_by_missingness_intermediate_threshold():
         }
     )
 
-    filtered = HpoFeatureBuilder.filter_by_missingness(matrix, missing_threshold=0.5)
+    filtered = HpoFeatureBuilder._filter_by_missingness(matrix, missing_threshold=0.5)
 
     # len(matrix)=3, min_non_missing=int((1-0.5)*3)=1
     assert list(filtered.columns) == ["HP:1", "HP:2", "HP:3"]
@@ -199,7 +199,7 @@ def test_build_raises_when_no_hpo_terms_found():
             metadata={},
         )
     ]
-    builder = HpoFeatureBuilder(records=records, hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =records, hpo_hierarchy=engine)
 
     with pytest.raises(ValueError) as excinfo:
         builder.build()
@@ -213,7 +213,7 @@ def test_build_raises_when_no_terms_remain_after_filtering(record1):
         index=pd.Index(["P1"], name="individual_id"),
     )
     engine = DummyHPOHierarchyEngine(propagated_matrix=propagated)
-    builder = HpoFeatureBuilder(records=[record1], hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =[record1], hpo_hierarchy=engine)
 
     with pytest.raises(ValueError) as excinfo:
         builder.build(missing_threshold=0.0)
@@ -239,7 +239,7 @@ def test_build_returns_hpo_feature_data(record1, record2):
         label_mapping={"HP:1": "Label 1", "HP:2": "Label 2"},
         relationship_mask=relationship_mask,
     )
-    builder = HpoFeatureBuilder(records=[record1, record2], hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =[record1, record2], hpo_hierarchy=engine)
 
     feature_data = builder.build(missing_threshold=1.0)
 
@@ -252,7 +252,7 @@ def test_build_calls_engine_with_expected_inputs(record1, record2):
     engine = DummyHPOHierarchyEngine(
         label_mapping={"HP:1": "Label 1", "HP:2": "Label 2", "HP:3": "Label 3"}
     )
-    builder = HpoFeatureBuilder(records=[record1, record2], hpo_hierarchy=engine)
+    builder = HpoFeatureBuilder(hpo_observations =[record1, record2], hpo_hierarchy=engine)
 
     feature_data = builder.build(missing_threshold=1.0)
 

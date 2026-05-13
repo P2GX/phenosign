@@ -1,5 +1,5 @@
-mkdocs
-mkdocs-material
-mkdocs-gen-files
-mkdocstrings[python]
-pymdown-extensions
+sphinx
+sphinx-rtd-theme
+nbsphinx>=0.8.10
+ipython
+nbconvert
