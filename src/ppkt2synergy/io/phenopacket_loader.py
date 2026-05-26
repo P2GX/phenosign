@@ -26,14 +26,21 @@ def load_phenopackets_by_cohort(
     -------
     list[ppkt.Phenopacket]
         Loaded phenopackets.
+
+    Raises
+    ------
+    TypeError
+        If `cohorts` is not of the expected type.
+    ValueError
+        If any specified cohort is not found in the store.
     """
     registry = configure_phenopacket_registry()
 
     with registry.open_phenopacket_store(release=ppkt_store_version) as ps:
-        available = [c.name for c in ps.cohorts()]
+        available_cohorts = [c.name for c in ps.cohorts()]
 
         if cohorts is None:
-            cohort_names = available
+            cohort_names = available_cohorts
         elif isinstance(cohorts, str):
             cohort_names = [cohorts]
         elif isinstance(cohorts, Sequence): 
@@ -44,15 +51,18 @@ def load_phenopackets_by_cohort(
                 f"(got {type(cohorts).__name__})"
             )
         
-        invalid = [c for c in cohort_names if c not in available]
+        cohort_names = list(dict.fromkeys(cohort_names))
+
+        invalid = [c for c in cohort_names if c not in available_cohorts]
         if invalid:
             raise ValueError(f"Cohorts not found in store: {invalid}")
         
-        cohort_names = list(dict.fromkeys(cohort_names))
-        phenopackets = []
-        for cohort_name in cohort_names:
-            for phenopacket in ps.iter_cohort_phenopackets(cohort_name):
-                phenopackets.append(phenopacket)
+        phenopackets = [
+            p
+            for cohort_name in cohort_names
+            for p in ps.iter_cohort_phenopackets(cohort_name)
+        ]
+        
     return phenopackets
     
     
@@ -68,7 +78,7 @@ def load_phenopackets_by_disease(
     ----------
     diseases : str | Sequence[str]
         Disease identifier or a sequence of identifiers in CURIE format
-        (e.g., ``"OMIM:614816"``).
+        (e.g., ``"OMIM:614816"``). Must not be empty or whitespace.
     ppkt_store_version : str | None, optional
         Phenopacket Store release tag, for example ``"0.1.23"``.
         If ``None``, the latest release is used.
@@ -77,18 +87,24 @@ def load_phenopackets_by_disease(
     -------
     list[ppkt.Phenopacket]
         Phenopackets that contain at least one matching observed disease.
+
+    Raises
+    ------
+    TypeError
+        If `diseases` is not str or sequence of str.
+    ValueError
+        If `diseases` is empty or only whitespace.
     """
     
     if isinstance(diseases, str):
-        if not diseases.strip():
-            raise ValueError("`diseases` must not be empty or only whitespace.")
-        disease_list = [diseases]
-    elif isinstance(diseases, Sequence):
-        disease_set = {d for d in diseases if d.strip()}  
-        if not disease_set:
-            raise ValueError("`diseases` must not be empty or only whitespace.")
-    else:
+        diseases = [diseases]
+    elif not isinstance(diseases, Sequence):
         raise TypeError("`diseases` must be str or sequence[str].")
+
+    disease_list = [d.strip() for d in diseases if d.strip()]
+    if not disease_list:
+        raise ValueError("`diseases` must not be empty or only whitespace.")
+    disease_set = set(disease_list)
 
     registry = configure_phenopacket_registry()
     matched: list[ppkt.Phenopacket] = []
@@ -98,12 +114,10 @@ def load_phenopackets_by_disease(
         for cohort in ps.cohorts():
             for phenopacket in ps.iter_cohort_phenopackets(cohort.name):
                 for disease in phenopacket.diseases:
-                    if not disease.term or not disease.term.id:
-                        continue
-                    if getattr(disease, "excluded", False):
+                    did = getattr(disease.term, "id", None)
+                    if not did or getattr(disease, "excluded", False):
                         continue
 
-                    did = disease.term.id
                     if did in disease_set:
                         matched.append(phenopacket)
                         found_ids.add(did)
@@ -117,6 +131,4 @@ def load_phenopackets_by_disease(
             missing,
         )
 
-    return matched
-
-    
+    return matched    

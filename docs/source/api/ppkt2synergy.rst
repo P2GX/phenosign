@@ -1,22 +1,14 @@
-ppkt2synergy package
-====================
+ppkt2synergy API
+=================
 
-Subpackages
------------
+Core modules of ppkt2synergy.
 
 .. toctree::
-   :maxdepth: 4
+   :maxdepth: 2
 
-   ppkt2synergy.analysis
    ppkt2synergy.core
+   ppkt2synergy.analysis
    ppkt2synergy.io
-   ppkt2synergy.ontology
    ppkt2synergy.preprocessing
-
-Module contents
----------------
-
-.. automodule:: ppkt2synergy
-   :members:
-   :undoc-members:
-   :show-inheritance:
+   ppkt2synergy.ontology
+   ppkt2synergy.condition_helper

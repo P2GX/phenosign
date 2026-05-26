@@ -25,7 +25,7 @@ class SynergyAnalyzer:
         self, 
         dataset: PhenotypeDataset, 
         n_permutations: int = 1000,
-        min_individuals_for_synergy_calculation: int = 40, 
+        min_individuals_for_synergy_calculation: int = 20, 
         random_state: int = 42,
     ):
         """
@@ -35,7 +35,7 @@ class SynergyAnalyzer:
             Analysis-ready dataset containing HPO features, targets, and metadata.
         n_permutations : int, default=1000
             Number of permutations used to estimate p-values.
-        min_individuals_for_synergy_calculation : int, default=40
+        min_individuals_for_synergy_calculation : int, default=20
             Minimum number of valid individuals required to evaluate a feature pair.
         random_state : int, default=42
             Random seed for reproducible permutation testing.
@@ -71,6 +71,8 @@ class SynergyAnalyzer:
             np.fill_diagonal(self.relationship_mask, np.nan)
 
         self.min_individuals_for_synergy_calculation = min_individuals_for_synergy_calculation
+
+        self._synergy_computed: bool = False
 
     @staticmethod
     def _encode_joint_binary_index( 
@@ -373,6 +375,8 @@ class SynergyAnalyzer:
                 pvals_corrected
             )
             self.synergy_results.sort_values(by="p_value", ascending=True, inplace=True)
+
+        self._synergy_computed = True
         
         return self.synergy_results
     
@@ -395,12 +399,8 @@ class SynergyAnalyzer:
         output_file : str, default="synergy_results.csv"
             Output file path. Supported formats are ``.csv`` and ``.xlsx``.
         """
-        if not hasattr(self, "synergy_results"):
+        if not self._synergy_computed:
             raise ValueError("Synergy results not computed. Run compute_synergy_matrix() first.")
-        
-        if self.synergy_results.empty:
-            logger.warning("Warning: Synergy results are empty. No file will be saved.")
-            return
         
         df = self.synergy_results.copy()
         if synergy_threshold < 0.0:
@@ -441,13 +441,10 @@ class SynergyAnalyzer:
         tuple[pd.DataFrame, pd.DataFrame]
             Filtered synergy matrix and filtered p-value matrix.
         """
-        if not hasattr(self, 'pvalue_matrix'):
+        if not self._synergy_computed:
             raise RuntimeError("Synergy matrix not found. Please run `compute_synergy_matrix()` first.")
         
-        synergy_matrix, p_value = self.synergy_matrix.copy(), self.pvalue_matrix.copy()
-        if self.synergy_results.empty:
-            logger.warning("Warning: Synergy results are empty.")
-            return 
+        synergy_matrix, p_value = self.synergy_matrix.copy(), self.pvalue_matrix.copy() 
 
         if synergy_threshold < 0.0:
             raise ValueError("synergy_threshold must be non-negative.")

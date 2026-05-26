@@ -13,58 +13,57 @@ Core usage
 .. code-block:: python
 
     from ppkt2synergy import PhenotypeDatasetBuilder
-    from gpsea.model import VariantEffect
 
     builder = PhenotypeDatasetBuilder(phenopackets)
 
     dataset = builder.build(
-        mane_tx_id=["NM_004612.4", "NM_003242.6"],
-        variant_effect_type=VariantEffect.MISSENSE_VARIANT,
         missing_threshold=0.9,
+        build_gpsea_cohort=True,
     )
 
 
 Dataset overview
-----------------
+^^^^^^^^^^^^^^^^
 
-The resulting dataset contains:
+The resulting ``PhenotypeDataset`` contains three components:
 
-- **phenotype features** (HPO-based representation of individuals)
-- **target variables** (e.g., disease labels or variant conditions)
-- **individual metadata**
+- **hpo_data** — binary HPO feature matrix across individuals, with optional
+  term relationship mask
+- **phenopackets** — the original phenopacket objects, retained for reference
+  and downstream computations
+- **gpsea_cohort** — a preprocessed GPSEA cohort object for variant-aware analyses
+  (present only when ``build_gpsea_cohort=True``)
 
-These components are used internally by correlation and synergy analysis.
+Two index properties provide convenient access to the matrix dimensions:
 
-.. note::
+.. code-block:: python
 
-   HPO features and disease targets are always constructed.
-
-   Variant-condition targets require both ``mane_tx_id`` and ``variant_effect_type``.
-
-   If no individuals match the variant condition, the target may contain only zeros.
+    dataset.individual_ids   # pd.Index of subject identifiers (rows)
+    dataset.feature_ids      # pd.Index of HPO term identifiers (columns)
 
 
 Key parameters
---------------
+^^^^^^^^^^^^^^
 
-- ``mane_tx_id``  
-  Defines the MANE transcript(s) used for constructing the variant-condition target.
+``missing_threshold``
+  Controls which HPO terms are retained based on how often they are observed
+  across individuals.
 
-- ``variant_effect_type``  
-  Specifies the variant effect class (e.g., missense variants).
+  ``missing_threshold=0.9`` keeps only HPO terms observed (or explicitly excluded)
+  in at least 10% of individuals. Set to ``1.0`` to retain all terms regardless
+  of missingness.
 
-- ``missing_threshold``  
-  Controls filtering of HPO terms based on missingness:
-
-  - values close to **1.0** → keep all features
-  - lower values → remove features with high missing rates
+``build_gpsea_cohort``
+  If ``True``, constructs a GPSEA-compatible cohort object and attaches it to
+  ``dataset.gpsea_cohort``. Required for variant-based condition analysis.
+  Defaults to ``True``.
 
 
 Advanced usage
 --------------
 
 Customizing HPO configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
@@ -73,40 +72,6 @@ Customizing HPO configuration
         hpo_file="path/to/hp.json",
         hpo_release="2023-10-09",
     )
-
-
-Restricting the feature space
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-    # Load full dataset
-    phenopackets_all = load_phenopackets_by_cohort()
-    dataset_all = PhenotypeDatasetBuilder(phenopackets_all).build(missing_threshold=1.0)
-
-    # Load reference cohort
-    phenopackets_fbn1 = load_phenopackets_by_cohort(cohorts="FBN1")
-    dataset_fbn1 = PhenotypeDatasetBuilder(phenopackets_fbn1).build(missing_threshold=1.0)
-
-    # Restrict features to those in reference cohort
-    dataset_all.hpo_data.matrix = dataset_all.hpo_data.matrix[
-        dataset_fbn1.hpo_data.matrix.columns
-    ]
-
-    dataset_all.hpo_data.relationship_mask = dataset_all.hpo_data.relationship_mask.loc[
-        dataset_fbn1.hpo_data.matrix.columns,
-        dataset_fbn1.hpo_data.matrix.columns
-    ]
-
-In some cases, you may want to evaluate a target on the full dataset
-while restricting features to those observed in a reference cohort.
-
-This setup allows:
-
-- the **population** to be defined by the full dataset
-- the **target** to represent a specific cohort
-- the **features** to be restricted to a reference phenotype space
-
 
 Next steps
 ----------
