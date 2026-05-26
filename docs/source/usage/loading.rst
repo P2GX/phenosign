@@ -1,119 +1,106 @@
 Loading Phenopackets
 ====================
 
-Loading phenopacket data is the first step in a **ppkt2synergy** workflow.
+**ppkt2synergy** is designed to work with any phenopacket data conforming to the
+`GA4GH Phenopacket schema <https://phenopacket-schema.readthedocs.io/en/latest/index.html>`_.
 
-**ppkt2synergy** is designed to work with phenopacket data from any source.
-For convenience, it provides helper functions to retrieve example datasets from the
-`Phenopacket Store <https://github.com/monarch-initiative/phenopacket-store>`_.
-
-.. note::
-
-   The loading functions shown below are optional utilities for quick exploration.
-   Any data following the
-   `GA4GH Phenopacket schema <https://phenopacket-schema.readthedocs.io/en/latest/index.html>`_
-   can be used directly with **ppkt2synergy**.
+For convenience, it also provides helper utilities to retrieve example datasets from the
+`Phenopacket Store <https://github.com/monarch-initiative/phenopacket-store>`_
+for quick exploration and testing.
 
 
 Using your own phenopacket data
 -------------------------------
 
-In most real-world use cases, you will provide your own phenopacket data.
+Pass your own phenopacket objects directly into downstream steps.
+The example below shows how to load phenopackets from a local ``.json`` file:
 
 .. code-block:: python
 
-    # Example: load your own phenopackets
-    phenopackets = [...]  # list of Phenopacket objects
+    from pathlib import Path
+    from phenopackets import Phenopacket
+    from google.protobuf.json_format import Parse
 
-As long as your data follows the Phenopacket schema, it can be passed directly into downstream steps such as dataset construction and analysis.
+    phenopackets = [
+        Parse(p.read_text(), Phenopacket())
+        for p in Path("data/").glob("*.json")
+    ]
+    
+Any list of ``Phenopacket`` objects can be passed directly into dataset construction and analysis.
 
 
 Load from the Phenopacket Store
 -------------------------------
 
-The following utilities allow you to retrieve datasets from the Phenopacket Store for testing or exploratory analysis.
+The following utilities download datasets from the Phenopacket Store.
+Browse available cohort names and disease identifiers in the
+`repository <https://github.com/monarch-initiative/phenopacket-store>`_
+before loading.
 
-.. note::
+.. tip::
 
-   The specified cohort or disease identifiers must exist in the Phenopacket Store.
-   Refer to the
-   `repository <https://github.com/monarch-initiative/phenopacket-store>`_
-   to browse available datasets.
+   These helpers are intended for exploration and testing.
 
 
 Load by cohort
-~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^
 
-Load phenopackets associated with a single cohort (e.g., a gene-based cohort).
+Load phenopackets for one or more gene-based cohorts:
 
 .. code-block:: python
 
     from ppkt2synergy import load_phenopackets_by_cohort
 
+    # Single cohort
     phenopackets = load_phenopackets_by_cohort("TGFBR1")
+
+    # Multiple cohorts — returns a single combined list
+    phenopackets = load_phenopackets_by_cohort(["TGFBR1", "TGFBR2", "SMAD3"])
+
     print(f"Loaded {len(phenopackets)} phenopackets")
 
-Combine phenopackets from multiple cohorts into a single list:
+.. warning::
 
-.. code-block:: python
-
-    multi_cohort_names = ["TGFBR1", "TGFBR2", "SMAD3"]
-
-    phenopackets = load_phenopackets_by_cohort(multi_cohort_names)
-    print(f"Loaded {len(phenopackets)} phenopackets")
-
-Load all available phenopackets:
-
-.. code-block:: python
-
-    phenopackets_all = load_phenopackets_by_cohort()
-    print(f"Loaded {len(phenopackets_all)} phenopackets from all available cohorts")
-
+   Calling ``load_phenopackets_by_cohort()`` with no arguments downloads the entire
+   Phenopacket Store, which may take several minutes.
 
 
 Load by disease
-~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^
 
-Retrieve phenopackets associated with a specific disease identifier.
+Load phenopackets for one or more disease identifiers:
 
 .. code-block:: python
 
     from ppkt2synergy import load_phenopackets_by_disease
 
+    # Single disease
     phenopackets = load_phenopackets_by_disease("OMIM:614816")
-    print(f"Loaded {len(phenopackets)} phenopackets")
 
-Aggregate phenopackets for multiple diseases:
+    # Multiple diseases — returns a single combined list
+    phenopackets = load_phenopackets_by_disease(["OMIM:614816", "OMIM:610168"])
 
-.. code-block:: python
-
-    phenopackets = load_phenopackets_by_disease([
-        "OMIM:614816",
-        "OMIM:610168",
-    ])
     print(f"Loaded {len(phenopackets)} phenopackets")
 
 
+Pinning a release for reproducibility
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Reproducibility
----------------
-
-By default, **ppkt2synergy** uses the latest available release of the Phenopacket Store.
-
-To ensure reproducible analyses, you can specify a particular version:
+By default, **ppkt2synergy** uses the latest available Phenopacket Store release.
+To ensure a reproducible analysis, pin a specific version:
 
 .. code-block:: python
 
     phenopackets = load_phenopackets_by_cohort(
         "TGFBR1",
-        ppkt_store_version="0.1.23"
+        ppkt_store_version="0.1.23",
     )
 
+The ``ppkt_store_version`` parameter is supported by both
+``load_phenopackets_by_cohort`` and ``load_phenopackets_by_disease``.
 
 
 Next step
 ---------
 
-Once phenopackets are loaded, proceed to dataset construction:
-
-See :doc:`dataset` for instructions on how to create a **ppkt2synergy** dataset from your phenopacket data.
+Once phenopackets are loaded, proceed to :doc:`dataset construction <dataset>`.

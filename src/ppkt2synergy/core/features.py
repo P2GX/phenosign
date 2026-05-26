@@ -101,7 +101,7 @@ class HpoFeatureData:
         if set(mask.index) != set(self.matrix.columns) or set(mask.columns) != set(self.matrix.columns):
             raise ValueError("`relationship_mask` must contain the same HPO terms as matrix columns.")
 
-        mask = mask.loc[self.matrix.columns, self.matrix.columns]
+        self.relationship_mask = mask.loc[self.matrix.columns, self.matrix.columns]
 
         invalid_mask = ~mask.isin([0]) & mask.notna()
         if invalid_mask.any().any():

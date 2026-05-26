@@ -9,7 +9,7 @@ It provides tools to systematically process
 identify pairwise associations, and detect higher-order interactions
 relevant to diseases or variant conditions.
 
----
+
 
 Overview
 --------
@@ -25,7 +25,7 @@ genotype-phenotype associations, and combinatorial biomarkers.
 - Detection of higher-order feature interactions (synergy)
 - Interactive visualization of correlation and synergy heatmaps
 
----
+
 
 Quick Example
 -------------
@@ -53,24 +53,22 @@ This minimal example demonstrates the workflow:
 
 **load phenopackets → build dataset → compute correlations**
 
----
 
-Getting Started
----------------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
+   :caption: Getting Started
 
    installation
-   tutorial
-
----
-
-Usage
------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
+   :caption: Tutorial
+
+   tutorial
+
+.. toctree::
+   :maxdepth: 1
    :caption: Usage
 
    usage/loading
@@ -78,13 +76,8 @@ Usage
    usage/correlation
    usage/synergy
 
----
-
-API Reference
--------------
-
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: API Reference
 
-   api/modules
+   api/ppkt2synergy

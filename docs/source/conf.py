@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath('../../src'))
 project = 'ppkt2synergy'
 copyright = '2026, Jing Chen'
 author = 'Jing Chen'
-release = '0.0.9'
+release = '0.1.0'
 
 # -- General configuration ---------------------------------------------------
 
@@ -29,5 +29,12 @@ html_static_path = ['_static']
 nbsphinx_show_input_prompt = False
 nbsphinx_execute = "auto"
 
+autosummary_imported_members = False
+add_module_names = False
 
-
+autosummary_generate = False
+autodoc_default_options = {
+    "members": True,
+    "undoc-members": False,
+    "private-members": False
+}

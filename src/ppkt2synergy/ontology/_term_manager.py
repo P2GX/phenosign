@@ -1,7 +1,7 @@
 from typing import IO
 import logging
 
-from ..io import load_hpo
+from ..io.hpo_loader import _load_hpo
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class HPOTermManager:
             HPO release identifier. If ``None``, the latest available
             release is used.
         """
-        self._hpo = load_hpo(file=hpo_file, release=release)
+        self._hpo = _load_hpo(file=hpo_file, release=release)
 
         self._ancestor_cache: dict[str, set[str]] = {}
         self._descendant_cache: dict[str, set[str]] = {}

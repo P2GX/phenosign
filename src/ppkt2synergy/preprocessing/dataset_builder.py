@@ -15,21 +15,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class _HpoObservation:
+    """
+    Immutable container for individual HPO observations.
+
+    Attributes
+    ----------
+    individual_id : str
+        Unique identifier for the individual.
+    observed_terms : frozenset[str]
+        HPO term IDs explicitly observed in the individual.
+    excluded_terms : frozenset[str]
+        HPO term IDs explicitly excluded in the individual.
+    """
     individual_id: str
     observed_terms: frozenset[str]
     excluded_terms: frozenset[str]
 
 class PhenotypeDatasetBuilder:
     """
-    Build an analysis-ready ``PhenotypeDataset`` from phenopacket inputs.
-
-    Responsibilities:
-    - validate phenopacket IDs early
-    - build HPO feature matrix
-    - apply HPO propagation
-    - filter by missingness
-    - build HPO labels and relationship mask
-    - optionally attach a prebuilt GPSEA cohort
+    Builder class to create an analysis-ready ``PhenotypeDataset`` from phenopackets.
     """
     def __init__(
         self,
@@ -42,11 +46,18 @@ class PhenotypeDatasetBuilder:
         Parameters
         ----------
         phenopackets : list[ppkt.Phenopacket]
-            Input phenopackets.
+            List of input Phenopacket objects.
         hpo_file : str | IO | None, optional
-            Local HPO file.
+            Local HPO ontology file. If None, the HPO release version is used.
         hpo_release : str | None, optional
-            HPO release version.
+            HPO release version (e.g., "v2023-10-09"). Ignored if `hpo_file` is provided.
+
+        Attributes
+        ----------
+        phenopackets : list[ppkt.Phenopacket]
+            Input phenopackets retained for downstream processing.
+        _hpo_engine : HPOHierarchyEngine
+            Engine for HPO propagation and label/relationship extraction.
         """
         self._validate_phenopackets(phenopackets)
         self.phenopackets = phenopackets
@@ -58,23 +69,32 @@ class PhenotypeDatasetBuilder:
     def build(
         self,
         missing_threshold: float = 1.0,
-        build_gpsea_cohort: bool = False,
+        build_gpsea_cohort: bool = True,
     ) -> PhenotypeDataset:
         """
-        Parse phenopackets and assemble a ``PhenotypeDataset`
+        Parse phenopackets and assemble a ``PhenotypeDataset``
 
         Parameters
         ----------
-        missing_threshold : float
-            Maximum allowed proportion of missing values per HPO term (0-1).
-        build_gpsea_cohort : bool
-            Whether to build a GPSEA cohort.
+        missing_threshold : float, default=1.0
+            Maximum allowed proportion of missing values per HPO term (0 = drop any
+            term with missing, 1 = keep all terms regardless of missingness).
+        build_gpsea_cohort : bool, default=True
+            If True, build a GPSEA cohort from phenopackets for variant-based conditions.
+            Requires GPSEA to be installed.
 
         Returns
         -------
         PhenotypeDataset
-            Contains HPO feature data, metadata dictionary, raw phenopackets,
-            optionally condition vector and targets.
+            Analysis-ready dataset containing:
+            - `hpo_data` : HpoFeatureData instance with HPO matrix, labels, and relationship mask
+            - `phenopackets` : raw phenopackets for reference
+            - `gpsea_cohort` : optional GPSEA cohort if `build_gpsea_cohort=True`
+
+        Raises
+        ------
+        ValueError
+            If no HPO terms are found in the phenopackets, or none remain after filtering.
         """
         observations = self._parse_hpo_observations(self.phenopackets)
         raw_matrix = self._build_raw_hpo_matrix(observations)
@@ -125,6 +145,21 @@ class PhenotypeDatasetBuilder:
     def _validate_phenopackets(
         phenopackets: list[ppkt.Phenopacket]
     ) -> None:
+        """
+        Validate phenopacket list integrity.
+
+        Checks performed:
+        - Not empty
+        - All elements are Phenopacket instances
+        - Each phenopacket has a non-empty unique `id`
+
+        Raises
+        ------
+        ValueError
+            If phenopackets are empty or duplicate/missing IDs are detected.
+        TypeError
+            If any element is not a Phenopacket.
+        """
         if not phenopackets:
             raise ValueError("phenopackets cannot be empty")
 
@@ -153,7 +188,17 @@ class PhenotypeDatasetBuilder:
     def _parse_hpo_observations(
         phenopackets: list[ppkt.Phenopacket]
     ) -> list[_HpoObservation]:
-        
+        """
+        Extract observed and excluded HPO terms from phenopackets.
+
+        Conflicting annotations (same term both observed and excluded) are
+        resolved with observed taking precedence.
+
+        Returns
+        -------
+        list[_HpoObservation]
+            Immutable observations per individual.
+        """
         observations: list[_HpoObservation] = []
 
         for phenopacket in phenopackets:
@@ -213,9 +258,11 @@ class PhenotypeDatasetBuilder:
         Returns
         -------
         pd.DataFrame
-            HPO status matrix with individuals as rows and HPO terms as
-            columns. Values are ``1`` for observed terms, ``0`` for excluded
-            terms, and ``NaN`` for unknown terms.
+            Matrix with individuals as rows, HPO terms as columns.
+            Values:
+            - 1.0 : observed
+            - 0.0 : excluded
+            - NaN : unknown
         """
         terms = sorted(
             set().union(
@@ -253,15 +300,14 @@ class PhenotypeDatasetBuilder:
         missing_threshold: float = 1.0,
     ) -> pd.DataFrame:
         """
-        Drop columns whose missing-value proportion exceeds the threshold.
+        Drop HPO terms whose proportion of missing values exceeds `missing_threshold`.
 
         Parameters
         ----------
         matrix : pd.DataFrame
             HPO status matrix.
         missing_threshold : float, default=1.0
-            Maximum allowed proportion of missing values per column.
-            Must satisfy ``0 <= missing_threshold <= 1``.
+            Maximum allowed proportion of missing values per term.
 
         Returns
         -------
@@ -270,8 +316,10 @@ class PhenotypeDatasetBuilder:
 
         Raises
         ------
+        TypeError
+            If `missing_threshold` is not numeric.
         ValueError
-            If ``missing_threshold`` is outside ``[0, 1]``.
+            If `missing_threshold` is outside [0, 1].
         """
         if not isinstance(missing_threshold, (int, float)):
             raise TypeError("`missing_threshold` must be numeric.")
@@ -288,6 +336,26 @@ class PhenotypeDatasetBuilder:
     def _build_gpsea_cohort(
         self
     ) -> Any:
+        """
+        Build a GPSEA cohort from phenopackets.
+
+        The cohort can then be used for transcript-aware variant effect analyses and individual-level condition vectors.
+
+        Requires
+        --------
+        GPSEA library installed. Raises ImportError if GPSEA is not available.
+
+        Returns
+        -------
+        Any
+            A GPSEA cohort object (typically a `gpsea.Cohort` instance)
+            containing all individuals from the phenopackets.
+
+        Raises
+        ------
+        ImportError
+            If GPSEA is not installed.
+        """
         try:
             from gpsea.preprocessing import (
                 configure_caching_cohort_creator,
@@ -306,5 +374,3 @@ class PhenotypeDatasetBuilder:
         )
 
         return gpsea_cohort
-
-        

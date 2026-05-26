@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 
 import numpy as np
 import pandas as pd
-from gpsea.model import VariantEffect, Cohort
+from gpsea.model import Patient, Cohort
 
 import logging
 
@@ -18,14 +18,22 @@ class PhenotypeDataset:
     """
     Unified dataset for phenotype-based analysis.
 
+    This class provides individual-level access to phenotype data, 
+    summary statistics, and GPSEA variant effects. It supports caching 
+    for repeated queries and allows building binary conditions based 
+    on predicates.
+
     Parameters
     ----------
     hpo_data : HpoFeatureData
-        HPO feature data.
+        HPO feature data container with binary feature matrix, labels, 
+        and optional relationship mask.
     phenopackets : list[ppkt.Phenopacket], optional
-        Original phenopackets. Retained for reference and downstream condition computation.
-    phenopacket_by_id : dict[str, ppkt.Phenopacket], optional
-        Parsed phenopacket records indexed by individual ID. Contains structured metadata extracted from phenopackets, such as observed/excluded HPO terms and other relevant fields.
+        Original phenopackets corresponding to individuals. Retained for 
+        reference and downstream computations. Default is an empty list.
+    gpsea_cohort : Cohort, optional
+        Preprocessed GPSEA cohort object for variant-aware analyses.
+        Default is None.
     """
     hpo_data: HpoFeatureData
     phenopackets: list[ppkt.Phenopacket] = field(default_factory=list)
@@ -33,7 +41,6 @@ class PhenotypeDataset:
     gpsea_cohort: Cohort | None = None
     _condition_cache: dict[str, pd.Series] = field(init=False, repr=False,default_factory=dict)
     _summary_cache: dict[str, pd.DataFrame] = field(init=False, repr=False, default_factory=dict)
-    _variant_effect_by_individual: dict[str, list[tuple[str, tuple[str, ...]]]] | None = field(init=False,repr=False,default=None)
 
     def __post_init__(self) -> None:
         if not isinstance(self.hpo_data, HpoFeatureData):
@@ -43,10 +50,12 @@ class PhenotypeDataset:
 
     @property
     def individual_ids(self) -> pd.Index:
+        """Individual IDs (matrix index)."""
         return self.hpo_data.individual_ids
 
     @property
     def feature_ids(self) -> pd.Index:
+        """HPO feature IDs (matrix columns)."""
         return self.hpo_data.feature_ids
     
     @staticmethod
@@ -63,6 +72,37 @@ class PhenotypeDataset:
         return indexed
     
     def describe_conditions(self) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]:
+        """
+        Generate summary tables describing key cohort-level conditions.
+
+        This method provides an overview of diseases, sex distribution,
+        gene annotations, and variant effects (if a GPSEA cohort is available).
+
+        Returns
+        -------
+        tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame | None]
+
+            - diseases_df : pd.DataFrame
+                Summary of observed and excluded diseases across individuals.
+                Columns: 'disease_id', 'label', 'observed_n', 'excluded_n'.
+
+            - sex_df : pd.DataFrame
+                Summary of sex distribution across individuals.
+                Columns: 'sex', 'n_individuals'.
+
+            - genes_df : pd.DataFrame
+                Summary of gene annotations across individuals.
+                Columns: 'gene_symbol', 'n_individuals'.
+
+            - variant_effects_df : pd.DataFrame or None
+                Summary of GPSEA variant effects by transcript.
+                Returns None if `gpsea_cohort` is not set.
+
+        Notes
+        -----
+        - Each DataFrame is independent and can be used for downstream analysis.
+        - Variant effects summary is only available when a GPSEA cohort has been provided.
+        """
         diseases_df = self.list_diseases()
         sex_df = self.describe_sex()
         genes_df = self.list_genes()
@@ -74,16 +114,41 @@ class PhenotypeDataset:
         
 
     def list_diseases(self, *, use_cache: bool = True) -> pd.DataFrame:
+        """
+        Summarize observed diseases across individuals.
+
+        Parameters
+        ----------
+        use_cache : bool, optional
+            Whether to use cached summary if available. Default is ``True``.
+
+        Returns
+        -------
+        pd.DataFrame
+
+            Columns:
+
+            - disease_id :
+                Disease identifier (e.g., OMIM or ORPHA ID).
+
+            - label :
+                Human-readable disease label.
+
+            - n_individuals :
+                Number and percentage of individuals with the disease.
+        """
         cache_key = "list_diseases"
 
         if use_cache and cache_key in self._summary_cache:
             return self._summary_cache[cache_key].copy()
 
-        rows: dict[str, dict] = {}
+        total_individuals = len(self.phenopackets)
+
+        disease_labels: dict[str, str] = {}
+        observed_counts: dict[str, int] = {}
 
         for phenopacket in self.phenopackets:
-            seen_observed: set[str] = set()
-            seen_excluded: set[str] = set()
+            seen_observed_in_patient: set[str] = set()
 
             for disease in getattr(phenopacket, "diseases", []):
                 term = getattr(disease, "term", None)
@@ -92,46 +157,69 @@ class PhenotypeDataset:
                 if not disease_id:
                     continue
 
-                label = getattr(term, "label", None)
-                excluded = bool(getattr(disease, "excluded", False))
+                if bool(getattr(disease, "excluded", False)):
+                    continue
 
-                if disease_id not in rows:
-                    rows[disease_id] = {
-                        "disease_id": disease_id,
-                        "label": label,
-                        "observed_n": 0,
-                        "excluded_n": 0,
-                    }
+                if disease_id not in disease_labels:
+                    disease_labels[disease_id] = getattr(term, "label", None) or "Unknown Label"
 
-                if excluded:
-                    seen_excluded.add(disease_id)
-                else:
-                    seen_observed.add(disease_id)
+                seen_observed_in_patient.add(disease_id)
 
-            for disease_id in seen_observed:
-                rows[disease_id]["observed_n"] += 1
+            for disease_id in seen_observed_in_patient:
+                observed_counts[disease_id] = observed_counts.get(disease_id, 0) + 1
 
-            for disease_id in seen_excluded - seen_observed:
-                rows[disease_id]["excluded_n"] += 1
-
-        df = pd.DataFrame(rows.values())
+        df = pd.DataFrame(
+            [
+                {
+                    "disease_id": dis_id, 
+                    "label": disease_labels[dis_id], 
+                    "observed_raw": count
+                }
+                for dis_id, count in observed_counts.items()
+            ]
+        )
 
         if df.empty:
-            df = pd.DataFrame(
-                columns=["disease_id", "label", "observed_n", "excluded_n"]
-            )
+            df = pd.DataFrame(columns=["disease_id", "label", "n_individuals"])
         else:
             df = df.sort_values(
-                ["observed_n", "excluded_n", "disease_id"],
-                ascending=[False, False, True],
+                ["observed_raw", "disease_id"],
+                ascending=[False, True]
             ).reset_index(drop=True)
 
-        if use_cache:
-            self._summary_cache[cache_key] = df.copy()
+            denom = total_individuals if total_individuals > 0 else 1
+            percentage = (df["observed_raw"] / denom) * 100
 
-        return df
+            df["n_individuals"] = (
+                df["observed_raw"].astype(str) +
+                " (" + percentage.round(1).astype(str) + "%)"
+            )
+
+            df = df.drop(columns=["observed_raw"])
+        return df.set_index("disease_id")
+
 
     def describe_sex(self, *, use_cache: bool = True) -> pd.DataFrame:
+        """
+        Summarize sex distribution across individuals.
+
+        Parameters
+        ----------
+        use_cache : bool, optional
+            Whether to use cached summary if available. Default is True.
+
+        Returns
+        -------
+        pd.DataFrame
+
+            Columns:
+
+            - sex :
+                One of ``female``, ``male``, or ``unknown``.
+
+            - n_individuals :
+                Count of individuals with this sex.
+        """
         cache_key = "describe_sex"
 
         if use_cache and cache_key in self._summary_cache:
@@ -157,30 +245,66 @@ class PhenotypeDataset:
             sex = sex_map.get(getattr(subject, "sex", None), "unknown")
             counts[sex] = counts.get(sex, 0) + 1
 
+        total_individuals = len(self.phenopackets)
+
         df = pd.DataFrame(
-            [{"sex": sex, "n_individuals": n} for sex, n in counts.items()]
+            [
+                {"sex": sex, "n_individuals_raw": n} 
+                for sex, n in counts.items()
+            ]
         )
 
-        if use_cache:
-            self._summary_cache[cache_key] = df.copy()
+        denom = total_individuals if total_individuals > 0 else 1
+        percentage = (df["n_individuals_raw"] / denom) * 100
 
-        return df
+        df["n_individuals"] = (
+            df["n_individuals_raw"].astype(str) + 
+            " (" + percentage.round(1).astype(str) + "%)"
+        )
+
+        df = df.drop(columns=["n_individuals_raw"])
+
+        return df.set_index("sex")
     
+
     def list_genes(self, *, use_cache: bool = True) -> pd.DataFrame:
+        """
+        List gene symbols annotated in the cohort.
+
+        Parameters
+        ----------
+        use_cache : bool, optional
+            Whether to use cached summary if available. Default is ``True``.
+
+        Returns
+        -------
+        pd.DataFrame
+
+            Columns:
+
+            - gene_symbol :
+                HGNC gene symbol.
+
+            - n_individuals :
+                Number and percentage of individuals carrying variants in the gene.
+        """
         cache_key = "list_genes"
 
         if use_cache and cache_key in self._summary_cache:
             return self._summary_cache[cache_key].copy()
 
+        total_individuals = len(self.phenopackets)
+
         counts: dict[str, int] = {}
 
         for phenopacket in self.phenopackets:
-            for gene_symbol in self._extract_gene_symbols(phenopacket):
+            unique_genes = set(self._extract_gene_symbols(phenopacket))
+            for gene_symbol in unique_genes:
                 counts[gene_symbol] = counts.get(gene_symbol, 0) + 1
 
         df = pd.DataFrame(
             [
-                {"gene_symbol": gene_symbol, "n_individuals": n}
+                {"gene_symbol": gene_symbol, "n_individuals_raw": n}
                 for gene_symbol, n in counts.items()
             ]
         )
@@ -189,14 +313,21 @@ class PhenotypeDataset:
             df = pd.DataFrame(columns=["gene_symbol", "n_individuals"])
         else:
             df = df.sort_values(
-                ["n_individuals", "gene_symbol"],
+                ["n_individuals_raw", "gene_symbol"],
                 ascending=[False, True],
             ).reset_index(drop=True)
 
-        if use_cache:
-            self._summary_cache[cache_key] = df.copy()
+            denom = total_individuals if total_individuals > 0 else 1
+            percentage = (df["n_individuals_raw"] / denom) * 100
 
-        return df
+            df["n_individuals"] = (
+                df["n_individuals_raw"].astype(str) + " (" + percentage.round(1).astype(str) + "%)"
+            )
+
+            df = df.drop(columns=["n_individuals_raw"])
+
+        return df.set_index("gene_symbol")
+    
     
     @staticmethod
     def _extract_gene_symbols(phenopacket: ppkt.Phenopacket) -> set[str]:
@@ -240,6 +371,7 @@ class PhenotypeDataset:
 
         return genes
     
+    
     def variant_effect_summary(
         self,
         *,
@@ -248,40 +380,80 @@ class PhenotypeDataset:
         """
         Summarize GPSEA variant effects by transcript.
 
-        Rows:
-            transcript IDs
+        Calculates variant effect distributions for each transcript.
+        Returns a transposed matrix where each cell contains both
+        absolute counts and percentages.
 
-        Columns:
-            variant effects
+        Parameters
+        ----------
+        use_cache : bool, optional
+            Whether to use a cached summary if available. Default is ``True``.
 
-        Values:
-            number of variants with that effect on the transcript.
+        Returns
+        -------
+        pd.DataFrame
+
+            Rows:
+                Variant effect types (e.g., ``MISSENSE``, ``NONSENSE``)
+
+            Columns:
+                Transcript IDs
+
+            Values:
+                Strings formatted as ``"count (percentage%)"``
+
+        Example:
+            ``15 (75.0%)``
+
+        Raises
+        ------
+        ValueError
+            If no GPSEA cohort has been loaded.
         """
         if self.gpsea_cohort is None:
             raise ValueError("No GPSEA cohort available.")
 
-        cache_key = "variant_effect_summary"
+        cache_key = "variant_effect_summary_fractional"
 
         if use_cache and cache_key in self._summary_cache:
             return self._summary_cache[cache_key].copy()
 
         counters = self.gpsea_cohort.variant_effect_count_by_tx()
 
-        summary = (
+        preferred_tx_ids = set()
+        for patient in self.gpsea_cohort.all_patients:
+            for variant in patient.variants:
+                for txa in variant.tx_annotations:
+                    if txa.is_preferred:
+                        preferred_tx_ids.add(txa.transcript_id)
+
+        counters = {tx_id: counters[tx_id] for tx_id in preferred_tx_ids if tx_id in counters}
+
+        raw_df = (
             pd.DataFrame.from_dict(counters, orient="index")
             .fillna(0)
             .astype(int)
         )
 
-        if not summary.empty:
-            summary = summary.sort_index()
-            summary.index.name = "transcript_id"
-            summary.columns.name = None
-
-        if use_cache:
-            self._summary_cache[cache_key] = summary.copy()
+        if not raw_df.empty:
+            raw_df = raw_df.sort_index()
+            
+            total_per_tx = raw_df.sum(axis=1)
+            percentage_df = raw_df.divide(total_per_tx, axis=0) * 100
+            
+            summary = raw_df.astype(str) + " (" + percentage_df.round(1).astype(str) + "%)"
+            
+            summary = summary.fillna("0 (0.0%)")
+            
+            summary = summary.T
+            
+            summary.index.name = "variant_effect"
+            summary.columns.name = "transcript_id"
+        else:
+            summary = pd.DataFrame()
 
         return summary
+    
 
     def get_condition(
         self,
@@ -291,16 +463,32 @@ class PhenotypeDataset:
         use_cache: bool = True,
     ) -> pd.Series:
         """
-        Convert a phenopacket predicate into a binary condition vector.
+        Convert a phenopacket predicate into an individual-level binary condition.
+
+        Parameters
+        ----------
+        predicate : Callable[[ppkt.Phenopacket], bool | None]
+            Function that maps a phenopacket to True, False, or None (unknown).
+        name : str | None, optional
+            Name of the condition to store in cache. Default is None.
+        use_cache : bool, optional
+            Whether to use cached condition if available. Default is True.
 
         Returns
         -------
         pd.Series
-            index = hpo_data.matrix.index
-            values:
-                1.0 = True
-                0.0 = False
-                NaN = unknown
+            Index: individual IDs
+            Values:
+            - 1.0 = True
+            - 0.0 = False
+            - NaN = unknown
+
+        Raises
+        ------
+        TypeError
+            If predicate returns a non-bool/non-None value.
+        RuntimeError
+            If predicate raises an exception for a specific individual.
         """
 
         if use_cache and name is not None and name in self._condition_cache:
@@ -340,41 +528,48 @@ class PhenotypeDataset:
 
         return condition
     
-    def get_variant_effect_condition(
+    
+    def get_variant_condition(
         self,
+        predicate: Callable[[Patient], bool | None],
         *,
-        transcript_id: str,
-        variant_effect: VariantEffect,
+        condition_name: str | None = None,
+        use_cache: bool = True,
     ) -> pd.Series:
         """
-        Build an individual-level condition vector for a transcript-aware variant effect.
+        Build a binary condition vector for transcript-aware variant effects.
 
-        Values
+        Parameters
+        ----------
+        predicate : Callable[[Patient], bool | None]
+            Function that maps a GPSEA Patient to True, False, or None.
+        condition_name : str | None, optional
+            Name of the condition to store in cache. Default is None.
+        use_cache : bool, optional
+            Whether to use cached condition if available. Default is True.
+
+        Returns
+        -------
+        pd.Series
+            Index: individual IDs
+            Values:
+            - 1.0 : at least one variant with the effect
+            - 0.0 : variant present but effect absent
+            - NaN : no variant annotation or unknown
+
+        Raises
         ------
-        1.0
-            The individual has at least one variant with `effect` on `transcript_id`.
-
-        0.0
-            The individual has at least one variant annotated on `transcript_id`,
-            but none has `effect`.
-
-        NaN
-            The individual has no variant annotation on `transcript_id`.
-
-        Notes
-        -----
-        This is intentionally individual-level, unlike
-        `variant_effect_summary()`, which summarizes variant counts.
+        ValueError
+            If GPSEA cohort is not available.
         """
         if self.gpsea_cohort is None:
             raise ValueError(
-                "No GPSEA cohort available. Variant effect condition requires "
+                "No GPSEA cohort available. Variant condition requires "
                 "a preprocessed GPSEA cohort."
             )
 
-        condition_name = f"variant_effect:{transcript_id}:{variant_effect}"
 
-        if condition_name in self._condition_cache:
+        if use_cache and condition_name in self._condition_cache:
             return self._condition_cache[condition_name].copy()
 
         condition = pd.Series(
@@ -393,44 +588,37 @@ class PhenotypeDataset:
                 condition.loc[individual_id] = np.nan
                 continue
 
-            saw_transcript = False
-            has_effect = False
+            value = predicate(patient)
 
-            for variant in patient.variants:
-                for txa in variant.tx_annotations:
-                    if str(txa.transcript_id) != transcript_id:
-                        continue
-
-                    saw_transcript = True
-
-                    effects = {
-                        variant_effect.name
-                        for variant_effect in txa.variant_effects
-                    }
-
-                    if variant_effect.name in effects:
-                        has_effect = True
-                        break
-
-                if has_effect:
-                    break
-
-            if has_effect:
-                condition.loc[individual_id] = 1.0
-            elif saw_transcript:
-                condition.loc[individual_id] = 0.0
-            else:
+            if value is None:
                 condition.loc[individual_id] = np.nan
+            else:
+                condition.loc[individual_id] = float(value)
 
-        if condition_name not in self._condition_cache:
+        if use_cache and condition_name not in self._condition_cache:
             self._condition_cache[condition_name] = condition.copy()
 
         return condition
+    
 
     def get_pmids(
         self, 
         individual_ids: Sequence[str]
     ) -> pd.Series:
+        """
+        Retrieve PubMed IDs associated with a list of individuals.
+
+        Parameters
+        ----------
+        individual_ids : Sequence[str]
+            List of individual IDs.
+
+        Returns
+        -------
+        pd.Series
+            Index: individual IDs
+            Values: list of PMIDs as strings. Empty list if no PMIDs found.
+        """
         result: dict[str, list[str]] = {}
 
         for individual_id in individual_ids:
@@ -454,6 +642,3 @@ class PhenotypeDataset:
                 pmids.append(ref_id.removeprefix("PMID:"))
 
         return sorted(set(pmids))
-    
-
-    

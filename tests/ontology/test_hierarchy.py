@@ -119,7 +119,7 @@ def test_build_relationship_mask(hpo_engine, toy_terms):
     terms = list(toy_terms)
 
     # optional but harmless: prepare terms for term manager cache
-    hpo_engine.term_manager.prepare_terms(set(terms))
+    hpo_engine._term_manager.prepare_terms(set(terms))
 
     mask = hpo_engine.build_relationship_mask(terms)
 
