@@ -29,21 +29,11 @@ class HPOCorrelationAnalyzer:
       ``0`` for excluded terms, and ``NaN`` for unknown terms.
     - Correlations are evaluated only for pairs with sufficient numbers of
       valid individuals.
-
-    Example:
-        from ppkt2synergy import load_phenopackets, PhenotypeDatasetBuilder,, HPOStatisticsAnalyzer
-        >>> phenopackets = load_phenopackets('FBN1')
-        >>> dataset_builder = PhenopacketAssembler(phenopackets)
-        >>> dataset = dataset_builder.build(missing_threshold=0.9)
-        >>> analyzer =HPOStatisticsAnalyzer(dataset, min_individuals_for_correlation_test=40)
-        >>> analyzer.compute_correlation_matrices("Spearman")
-        >>> analyzer.plot_correlation_heatmap_with_significance("Spearman")
-  
     """
     def __init__(
         self,  
         dataset: PhenotypeDataset, 
-        min_individuals_for_correlation_test: int = 30,
+        min_individuals_for_correlation_test: int = 20,
         min_cooccurrence_count = 1
     ):
         """
@@ -51,7 +41,7 @@ class HPOCorrelationAnalyzer:
         ----------
         dataset : PhenotypeDataset
             Dataset containing HPO feature data and metadata.
-        min_individuals_for_correlation_test : int, default=30
+        min_individuals_for_correlation_test : int, default=20
             Minimum number of valid individuals required to evaluate a
             pairwise correlation.
         min_cooccurrence_count : int, default=1
@@ -77,6 +67,8 @@ class HPOCorrelationAnalyzer:
         
         self.min_individuals_for_correlation_test = min_individuals_for_correlation_test
         self.min_coccurrence_count = min_cooccurrence_count
+
+        self._correlation_computed: bool = False
 
     def _calculate_stats( 
         self,
@@ -250,7 +242,7 @@ class HPOCorrelationAnalyzer:
             raise ValueError(
                 f"`correlation_type` must be a `CorrelationType`, got {type(correlation_type).__name__}."
             )
-
+        self.correlation_type = correlation_type
         x = self.hpo_matrix.to_numpy()
 
         has_one = np.any(x == 1)
@@ -353,12 +345,14 @@ class HPOCorrelationAnalyzer:
             )
             self.correlation_results.sort_values(by="p_value", ascending=True, inplace=True)
 
+        self._correlation_computed = True
+
         return self.correlation_results
     
     def save_correlation_results(
         self, 
-        abs_threshold: float = 0.0,
-        adj_pval_threshold: float = 1.0,
+        corr_threshold: float = 0.1,
+        adj_pval_threshold: float = 0.3,
         output_file: str="correlation_results.csv"
     ) -> None:
         """
@@ -366,9 +360,9 @@ class HPOCorrelationAnalyzer:
 
         Parameters
         ----------
-        abs_threshold : float, default=0.0
-            Minimum absolute correlation coefficient to retain.
-        adj_pval_threshold : float, default=1.0
+        corr_threshold : float, default=0.0
+            Minimum correlation coefficient to retain.
+        adj_pval_threshold : float, default=0.3
             Maximum adjusted p-value to retain.
         output_file : str, default="correlation_results.csv"
             Output file path. Supported formats are ``.csv`` and ``.xlsx``.
@@ -379,17 +373,12 @@ class HPOCorrelationAnalyzer:
             If correlation results have not been computed or if thresholds
             are invalid.
         """
-        if not hasattr(self, "correlation_results"):
+        if not self._correlation_computed:
             raise ValueError("Correlation results not computed. Run compute_correlation_matrix() first.")
-        
-        df = self.correlation_results.copy()
-        if df.empty:
-            logger.warning("Warning: Correlation results are empty. No file will be saved.")
-            return
 
-        if abs_threshold < 0.0 or abs_threshold > 1.0:
+        if corr_threshold < 0.0 or corr_threshold > 1.0:
             raise ValueError("abs_threshold must be between 0.0 and 1.0")
-        df = df[df["correlation"].abs() >= abs_threshold]
+        df = df[df["correlation"].abs() >= corr_threshold]
 
         if adj_pval_threshold < 0.0 or adj_pval_threshold > 1.0:
             raise ValueError("adj_pval_threshold must be between 0.0 and 1.0")
@@ -407,16 +396,16 @@ class HPOCorrelationAnalyzer:
     
     def filter_weak_correlations(
         self, 
-        abs_threshold: float = 0.55,
-        adj_pval_threshold: float = 0.1
+        corr_threshold: float = 0.1,
+        adj_pval_threshold: float = 0.3
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Filter the correlation and p-value matrices by effect size and significance.
 
         Parameters
         ----------
-        abs_threshold : float, default=0.55
-            Minimum absolute correlation coefficient to retain.
+        corr_threshold : float, default=0.0
+            Minimum correlation coefficient to retain.
         adj_pval_threshold : float, default=0.1
             Maximum adjusted p-value to retain.
 
@@ -425,19 +414,15 @@ class HPOCorrelationAnalyzer:
         tuple[pd.DataFrame, pd.DataFrame]
             Filtered correlation matrix and filtered p-value matrix.
         """
-        if not hasattr(self, 'coef_df') or not hasattr(self, 'pval_df'):
+        if not self._correlation_computed:
             raise RuntimeError("Correlation matrix not found. Please run `compute_correlation_matrix()` first.")
-        
-        if self.correlation_results.empty:
-            logger.warning("Warning: Correlation results are empty. No correlations to filter.")
-            return
 
         coef_matrix = self.coef_df.copy()
         p_value = self.pval_df.copy()
 
-        if abs_threshold < 0.0 or abs_threshold > 1.0:
-            raise ValueError("abs_threshold must be between 0.0 and 1.0")
-        mask = coef_matrix.abs() < abs_threshold
+        if corr_threshold < 0.0 or corr_threshold > 1.0:
+            raise ValueError("corr_threshold must be between 0.0 and 1.0")
+        mask = coef_matrix.abs() < corr_threshold
         coef_matrix[mask] = np.nan
         p_value[mask] = np.nan
 
@@ -499,20 +484,17 @@ class HPOCorrelationAnalyzer:
 
     def plot_correlation_heatmap_with_significance(
         self,
-        stats_name: str = "spearman",
-        abs_threshold: float = 0.55,
-        adj_pval_threshold: float = 0.1,
-        title_name: str = "",
+        corr_threshold: float = 0.1,
+        adj_pval_threshold: float = 0.3,
+        title_name: str | None = None,
     ) -> go.Figure:
         """
         Plot a correlation heatmap with statistical filtering.
 
         Parameters
         ----------
-        correlation_type : CorrelationType, default=CorrelationType.SPEARMAN
-            Correlation type used for the title.
-        abs_threshold : float, default=0.55
-            Minimum absolute correlation coefficient to display.
+        corr_threshold : float, default=0.0
+            Minimum correlation coefficient to display.
         adj_pval_threshold : float, default=0.1
             Maximum adjusted p-value to display.
         title_name : str, optional
@@ -529,22 +511,22 @@ class HPOCorrelationAnalyzer:
             >>> # Generate heatmap (returns a Plotly Figure)
             >>> fig = analyzer.plot_correlation_heatmap_with_significance(
             ...     stats_name="spearman",
-            ...     abs_threshold=0.55,
-            ...     corrected_alpha=0.1,
+            ...     corr_threshold=0.55,
+            ...     adj_pval_threshold=0.1,
             ...     title_name="Cohort A"
             ... )
             >>> # Show in Jupyter or browser
             >>> fig.show()
         """
         coef_matrix, pval_matrix = self.filter_weak_correlations(
-            abs_threshold=abs_threshold,
+            corr_threshold=corr_threshold,
             adj_pval_threshold=adj_pval_threshold
         )
 
         if coef_matrix.empty or np.isnan(coef_matrix.values).all():
             raise ValueError(
                 "The coefficient matrix is empty after filtering. "
-                "Try adjusting `abs_threshold` or `adj_pval_threshold`."
+                "Try adjusting `corr_threshold` or `adj_pval_threshold`."
             )
 
         raw_coef_df = self.coef_df.loc[coef_matrix.index, coef_matrix.columns]
@@ -652,7 +634,7 @@ class HPOCorrelationAnalyzer:
                         "invalid_computation": "the correlation could not be computed for this HPO pair.",
                         "filtered_by_statistics": (
                             f"the correlation did not pass the statistical filters "
-                            f"(|corr| >= {abs_threshold} and adjusted p-value < {adj_pval_threshold})."
+                            f"(|corr| >= {corr_threshold} and adjusted p-value < {adj_pval_threshold})."
                         ),
                         "hidden_upper_triangle": "only the lower-left triangle is displayed.",
                     }
@@ -724,10 +706,15 @@ class HPOCorrelationAnalyzer:
         max_ylabel_len = max(len(str(lbl)) for lbl in coef_matrix.index)
         left_margin = 60 + max_ylabel_len * label_fontsize
 
+        clean_subtitle = title_name.strip() if title_name and title_name.strip() else ""
+
+        main_title = f"<b>{self.correlation_type.name} Correlation</b>"
+        
+        full_title = f"{main_title}<br><span style='font-size:0.8em'>{clean_subtitle}</span>" if clean_subtitle else main_title
+
         fig.update_layout(
             title=dict(
-                text=f"<b>{stats_name.capitalize()} Correlation</b><br>"
-                    f"<span style='font-size:0.8em'>{title_name}</span>",
+                text=full_title,
                 x=0.5,
                 xanchor="center",
                 yanchor="top",

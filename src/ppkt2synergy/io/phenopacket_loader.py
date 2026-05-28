@@ -1,26 +1,15 @@
-from dataclasses import dataclass
 from collections.abc import Sequence
+
 import phenopackets as ppkt
 from ppktstore.registry import configure_phenopacket_registry
+import logging
 
-@dataclass(slots=True)
-class EnrichedPhenopacket:
-    """Phenopacket annotated with cohort membership."""
-    phenopacket: ppkt.Phenopacket
-    cohort: str
-
-    @property
-    def phenopacket_id(
-        self
-    ) -> str:
-        """Return the individual ID from the underlying Phenopacket."""
-        return self.phenopacket.id
-
+logger = logging.getLogger(__name__)
 
 def load_phenopackets_by_cohort(
     cohorts: str | Sequence[str] | None = None,
     ppkt_store_version: str | None = None,
-) -> list[EnrichedPhenopacket]:
+) -> list[ppkt.Phenopacket]:
     """
     Load phenopackets from the Phenopacket Store by cohort.
 
@@ -35,56 +24,52 @@ def load_phenopackets_by_cohort(
 
     Returns
     -------
-    list[EnrichedPhenopacket]
-        Loaded phenopackets annotated with cohort membership.
+    list[ppkt.Phenopacket]
+        Loaded phenopackets.
+
+    Raises
+    ------
+    TypeError
+        If `cohorts` is not of the expected type.
+    ValueError
+        If any specified cohort is not found in the store.
     """
     registry = configure_phenopacket_registry()
-    try:
-        with registry.open_phenopacket_store(release=ppkt_store_version) as ps:
-            available = [c.name for c in ps.cohorts()]
-            available_set = set(available)
 
-            if cohorts is None:
-                cohort_names = available
-            elif isinstance(cohorts, str):
-                cohort_names = [cohorts]
-            elif isinstance(cohorts, Sequence): 
-                non_str = [type(c).__name__ for c in cohorts if not isinstance(c, str)]
-                if non_str:
-                    raise TypeError(
-                        "`cohorts` must be a string or a sequence of strings "
-                        f"(found non-string elements: {non_str})"
-                    )
-                cohort_names = list(cohorts)
-            else:
-                raise TypeError(
-                    "`cohorts` must be str, sequence[str], or None "
-                    f"(got {type(cohorts).__name__})"
-                )
+    with registry.open_phenopacket_store(release=ppkt_store_version) as ps:
+        available_cohorts = [c.name for c in ps.cohorts()]
 
-            invalid = [c for c in cohort_names if c not in available_set]
-            if invalid:
-                raise ValueError(f"Unknown cohorts: {invalid}")
+        if cohorts is None:
+            cohort_names = available_cohorts
+        elif isinstance(cohorts, str):
+            cohort_names = [cohorts]
+        elif isinstance(cohorts, Sequence): 
+            cohort_names = list(cohorts)
+        else:
+            raise TypeError(
+                "`cohorts` must be str, sequence[str], or None, "
+                f"(got {type(cohorts).__name__})"
+            )
+        
+        cohort_names = list(dict.fromkeys(cohort_names))
 
-            enriched_phenopackets = []
-            for cohort_name in cohort_names:
-                for phenopacket in ps.iter_cohort_phenopackets(cohort_name):
-                    enriched_phenopackets.append(EnrichedPhenopacket(phenopacket=phenopacket, cohort=cohort_name))
-        return enriched_phenopackets
+        invalid = [c for c in cohort_names if c not in available_cohorts]
+        if invalid:
+            raise ValueError(f"Cohorts not found in store: {invalid}")
+        
+        phenopackets = [
+            p
+            for cohort_name in cohort_names
+            for p in ps.iter_cohort_phenopackets(cohort_name)
+        ]
+        
+    return phenopackets
     
-    except (TypeError, ValueError):
-        raise
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to load phenopackets from store "
-            f"(release={ppkt_store_version})"
-        ) from e
-
     
 def load_phenopackets_by_disease(
     diseases: str | Sequence[str],
     ppkt_store_version: str | None = None,
-) -> list[EnrichedPhenopacket]:
+) -> list[ppkt.Phenopacket]:
     """
     Load phenopackets with observed disease identifiers matching one or
     more requested diseases.
@@ -93,54 +78,57 @@ def load_phenopackets_by_disease(
     ----------
     diseases : str | Sequence[str]
         Disease identifier or a sequence of identifiers in CURIE format
-        (e.g., ``"OMIM:614816"``).
+        (e.g., ``"OMIM:614816"``). Must not be empty or whitespace.
     ppkt_store_version : str | None, optional
         Phenopacket Store release tag, for example ``"0.1.23"``.
         If ``None``, the latest release is used.
 
     Returns
     -------
-    list[EnrichedPhenopacket]
-        Phenopackets that contain at least one matching observed disease and annotated with cohort membership.
+    list[ppkt.Phenopacket]
+        Phenopackets that contain at least one matching observed disease.
+
+    Raises
+    ------
+    TypeError
+        If `diseases` is not str or sequence of str.
+    ValueError
+        If `diseases` is empty or only whitespace.
     """
+    
     if isinstance(diseases, str):
-        disease_set = {diseases}
-    elif isinstance(diseases, Sequence):
-        non_str = [type(d).__name__ for d in diseases if not isinstance(d, str)]
-        if non_str:
-            raise TypeError(
-                "`diseases` must be a string or a sequence of strings "
-                f"(found non-string elements: {non_str})"
-            )
-        disease_set = set(diseases)
-    else:
-        raise TypeError(
-            "`diseases` must be a string or a sequence of strings "
-            f"(got {type(diseases).__name__})"
-        )
+        diseases = [diseases]
+    elif not isinstance(diseases, Sequence):
+        raise TypeError("`diseases` must be str or sequence[str].")
+
+    disease_list = [d.strip() for d in diseases if d.strip()]
+    if not disease_list:
+        raise ValueError("`diseases` must not be empty or only whitespace.")
+    disease_set = set(disease_list)
 
     registry = configure_phenopacket_registry()
+    matched: list[ppkt.Phenopacket] = []
+    found_ids: set[str] = set()
 
-    try:
-        matched_phenopackets: list[EnrichedPhenopacket] = []
+    with registry.open_phenopacket_store(release=ppkt_store_version) as ps:
+        for cohort in ps.cohorts():
+            for phenopacket in ps.iter_cohort_phenopackets(cohort.name):
+                for disease in phenopacket.diseases:
+                    did = getattr(disease.term, "id", None)
+                    if not did or getattr(disease, "excluded", False):
+                        continue
 
-        with registry.open_phenopacket_store(release=ppkt_store_version) as ps:
-            for cohort in ps.cohorts():
-                for phenopacket in ps.iter_cohort_phenopackets(cohort.name):
+                    if did in disease_set:
+                        matched.append(phenopacket)
+                        found_ids.add(did)
+                        break
 
-                    for disease in phenopacket.diseases:
-                        if not disease.term or not disease.term.id:
-                            continue
-                        if getattr(disease, "excluded", False):
-                            continue
-                        if disease.term.id in disease_set:
-                            matched_phenopackets.append(EnrichedPhenopacket(phenopacket=phenopacket, cohort=cohort.name))
-                            break
+    missing = [d for d in disease_list if d not in found_ids]
+    if missing:
+        logger.warning(
+            "No phenopackets matched disease identifier(s): %s."
+            "This may indicate incorrect identifiers or absence in the dataset.",
+            missing,
+        )
 
-        return matched_phenopackets
-    except(TypeError,ValueError):
-        raise
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to load phenopackets from store (release={ppkt_store_version})"
-        ) from e
+    return matched    
