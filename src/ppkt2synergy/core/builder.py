@@ -1,17 +1,17 @@
-from typing import IO
+from typing import IO, Any
 from dataclasses import dataclass
 import logging
-from typing import Any
 
 import pandas as pd
 import phenopackets as ppkt
 import numpy as np
 
-from ..core.features import HpoFeatureData
-from ..core import PhenotypeDataset
+from .features_data import HpoFeatureData
+from .dataset import PhenotypeDataset
 from ..ontology import HPOHierarchyEngine
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class _HpoObservation:
@@ -22,24 +22,29 @@ class _HpoObservation:
     ----------
     individual_id : str
         Unique identifier for the individual.
+
     observed_terms : frozenset[str]
         HPO term IDs explicitly observed in the individual.
+
     excluded_terms : frozenset[str]
         HPO term IDs explicitly excluded in the individual.
     """
+
     individual_id: str
     observed_terms: frozenset[str]
     excluded_terms: frozenset[str]
+
 
 class PhenotypeDatasetBuilder:
     """
     Builder class to create an analysis-ready ``PhenotypeDataset`` from phenopackets.
     """
+    
     def __init__(
         self,
         phenopackets: list[ppkt.Phenopacket],
         *,
-        hpo_file: str | IO | None = None,
+        hpo_file: str | IO[Any] | None = None,
         hpo_release: str | None = None,
     ) -> None:
         """
@@ -47,17 +52,12 @@ class PhenotypeDatasetBuilder:
         ----------
         phenopackets : list[ppkt.Phenopacket]
             List of input Phenopacket objects.
-        hpo_file : str | IO | None, optional
+
+        hpo_file : str | IO[Any] | None, optional
             Local HPO ontology file. If None, the HPO release version is used.
+
         hpo_release : str | None, optional
             HPO release version (e.g., "v2023-10-09"). Ignored if `hpo_file` is provided.
-
-        Attributes
-        ----------
-        phenopackets : list[ppkt.Phenopacket]
-            Input phenopackets retained for downstream processing.
-        _hpo_engine : HPOHierarchyEngine
-            Engine for HPO propagation and label/relationship extraction.
         """
         self._validate_phenopackets(phenopackets)
         self.phenopackets = phenopackets
@@ -77,8 +77,8 @@ class PhenotypeDatasetBuilder:
         Parameters
         ----------
         missing_threshold : float, default=1.0
-            Maximum allowed proportion of missing values per HPO term (0 = drop any
-            term with missing, 1 = keep all terms regardless of missingness).
+            Threshold for filtering out individuals with too many missing HPO terms. 1.0 (default): no filtering,
+            keep all individuals regardless of missingness.
         build_gpsea_cohort : bool, default=True
             If True, build a GPSEA cohort from phenopackets for variant-based conditions.
             Requires GPSEA to be installed.
@@ -120,6 +120,7 @@ class PhenotypeDatasetBuilder:
                 f"n_after_propagation={propagated_matrix.shape[1]}."
             )
 
+
         hpo_data = HpoFeatureData(
             matrix=filtered_matrix,
             label_mapping=self._hpo_engine.get_labels(),
@@ -128,23 +129,16 @@ class PhenotypeDatasetBuilder:
             ),
         )
 
-        gpsea_cohort = None
-
-        if build_gpsea_cohort:
-            from gpsea.preprocessing import configure_caching_cohort_creator, load_phenopackets 
-            cohort_creator = configure_caching_cohort_creator(self._hpo_engine.hpo) 
-            gpsea_cohort, _ = load_phenopackets(phenopackets=self.phenopackets, cohort_creator=cohort_creator, )
+        gpsea_cohort = self._build_gpsea_cohort() if build_gpsea_cohort else None
 
         return PhenotypeDataset(
             hpo_data=hpo_data,
             phenopackets=self.phenopackets,
             gpsea_cohort= gpsea_cohort,
         )
-    
+
     @staticmethod
-    def _validate_phenopackets(
-        phenopackets: list[ppkt.Phenopacket]
-    ) -> None:
+    def _validate_phenopackets(phenopackets: list[ppkt.Phenopacket]) -> None:
         """
         Validate phenopacket list integrity.
 
@@ -157,6 +151,7 @@ class PhenotypeDatasetBuilder:
         ------
         ValueError
             If phenopackets are empty or duplicate/missing IDs are detected.
+            
         TypeError
             If any element is not a Phenopacket.
         """
@@ -185,9 +180,7 @@ class PhenotypeDatasetBuilder:
             seen.add(individual_id)
 
     @staticmethod
-    def _parse_hpo_observations(
-        phenopackets: list[ppkt.Phenopacket]
-    ) -> list[_HpoObservation]:
+    def _parse_hpo_observations(phenopackets: list[ppkt.Phenopacket]) -> list[_HpoObservation]:
         """
         Extract observed and excluded HPO terms from phenopackets.
 
@@ -207,18 +200,8 @@ class PhenotypeDatasetBuilder:
             observed_terms: set[str] = set()
             excluded_terms: set[str] = set()
 
-            for f in phenopacket.phenotypic_features:
-                if not getattr(f, "type", None) or not getattr(f.type, "id", None):
-                    continue
-                term_id = f.type.id
-                if getattr(f, "excluded", False):
-                    excluded_terms.add(term_id)
-                else:
-                    observed_terms.add(term_id)
-
-            for feature in getattr(phenopacket, "phenotypic_features", []):
-                term = getattr(feature, "type", None)
-                term_id = getattr(term, "id", None)
+            for feature in phenopacket.phenotypic_features:
+                term_id = getattr(getattr(feature, "type", None), "id", None)
 
                 if not term_id:
                     continue
@@ -248,10 +231,9 @@ class PhenotypeDatasetBuilder:
 
         return observations
 
+
     @staticmethod
-    def _build_raw_hpo_matrix(
-        observations: list[_HpoObservation],
-    ) -> pd.DataFrame:
+    def _build_raw_hpo_matrix(observations: list[_HpoObservation]) -> pd.DataFrame:
         """
         Construct the raw HPO status matrix from individual records.
 
@@ -264,6 +246,7 @@ class PhenotypeDatasetBuilder:
             - 0.0 : excluded
             - NaN : unknown
         """
+
         terms = sorted(
             set().union(
                 *(obs.observed_terms | obs.excluded_terms for obs in observations)
@@ -275,7 +258,7 @@ class PhenotypeDatasetBuilder:
         matrix = np.full(
             shape=(len(observations), len(terms)),
             fill_value=np.nan,
-            dtype=np.float32,
+            dtype=np.float64,
         )
 
         term_to_col = {term: col for col, term in enumerate(terms)}
@@ -293,7 +276,6 @@ class PhenotypeDatasetBuilder:
             columns=pd.Index(terms, name="hpo_id"),
         )
     
-
     @staticmethod
     def _filter_by_missingness(
         matrix: pd.DataFrame,
@@ -333,9 +315,7 @@ class PhenotypeDatasetBuilder:
 
         return matrix.dropna(axis=1, thresh=min_non_missing)
 
-    def _build_gpsea_cohort(
-        self
-    ) -> Any:
+    def _build_gpsea_cohort(self) -> Any:
         """
         Build a GPSEA cohort from phenopackets.
 

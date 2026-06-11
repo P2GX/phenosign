@@ -1,9 +1,51 @@
-from typing import IO
+from typing import IO, Any
 import logging
 
-from ..io.hpo_loader import _load_hpo
+import hpotk
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+
+def _load_ontology(
+    file: IO[Any] | str | None = None,
+    release: str | None = None
+) -> hpotk.MinimalOntology:
+    """
+    Load a minimal Human Phenotype Ontology (HPO) instance.
+
+    The ontology is loaded from ``file`` if provided, otherwise from the
+    specified ``release``. If neither file nor release is provided, the latest available release is loaded by default.
+
+    Parameters
+    ----------
+    file : IO[Any] | str | None, optional
+        A local file path, remote URL (str), or an opened file-like object (IO), pointing to an HPO ontology file (e.g. ``hp.json``).
+    
+    release : str | None, optional
+        HPO release tag, for example ``"v2023-10-09"``, used when ``file`` is ``None``.
+
+    Returns
+    -------
+    hpotk.MinimalOntology
+        Loaded HPO ontology.
+    """
+    if file is not None:
+        ontology = hpotk.load_minimal_ontology(file)
+        logger.info("Loaded HPO ontology from file: %s", file)
+        return ontology
+    
+    # Fall back to the ontology store for release-based or latest loading.
+    store = hpotk.configure_ontology_store()
+    
+    if release is not None:
+        ontology = store.load_minimal_hpo(release=release)
+        logger.info("Loaded HPO ontology from release: %s", release)
+        return ontology
+
+    ontology = store.load_minimal_hpo()
+    logger.info("Loaded HPO ontology from the latest available release.")
+    return ontology
 
 
 class HPOTermManager:
@@ -13,29 +55,24 @@ class HPOTermManager:
     This class provides a lightweight interface to the loaded HPO ontology.
     It resolves term IDs to canonical identifiers and caches ancestors,
     descendants, labels, and original-to-canonical ID mappings.
-
-    Notes
-    -----
-    Invalid HPO terms are skipped during bulk preparation with a warning.
-    Individual term resolution via ``resolve_term_id`` raises ``ValueError``
-    if the term is not found in the ontology.
     """
 
     def __init__(
         self,
-        hpo_file: str | IO | None = None,
+        hpo_file: str | IO[Any] | None = None,
         release: str | None = None,
     ) -> None:
         """
         Parameters
         ----------
-        hpo_file : str | IO | None, optional
+        hpo_file : str | IO[Any] | None, optional
             Path, URL, or file-like object pointing to an HPO ontology file.
+
         release : str | None, optional
             HPO release identifier. If ``None``, the latest available
             release is used.
         """
-        self._hpo = _load_hpo(file=hpo_file, release=release)
+        self._hpo = _load_ontology(file=hpo_file, release=release)
 
         self._ancestor_cache: dict[str, set[str]] = {}
         self._descendant_cache: dict[str, set[str]] = {}
@@ -43,11 +80,9 @@ class HPOTermManager:
         self._id_mapping_cache: dict[str, str] = {}
 
     @property
-    def hpo(self):
+    def hpo(self) -> hpotk.MinimalOntology:
         """
         Return the underlying HPO ontology object (read-only).
-
-        Advanced/internal use only.
         """
         return self._hpo
 
@@ -109,10 +144,11 @@ class HPOTermManager:
                 self._id_mapping_cache[term] = primary_id
 
                 if primary_id not in self._label_cache:
-                    self._label_cache[primary_id] = self._hpo.get_term(term_id=primary_id).name
+                    term_obj = self._hpo.get_term(term_id=primary_id)
+                    self._label_cache[primary_id] = term_obj.name if term_obj else ""
 
             except ValueError as exc:
-                logger.warning("%s Skipping term %r", exc, term)
+                logger.warning("Skipping invalid HPO term %r: %s", term,exc)
 
         new_terms = resolved_terms - self._ancestor_cache.keys()
 
@@ -138,7 +174,7 @@ class HPOTermManager:
     def get_ancestors(self, term: str) -> set[str]:
         """Return cached ancestor terms for a canonical HPO term ID."""
         return self._ancestor_cache.get(term, set())
-
+    
     def get_descendants(self, term: str) -> set[str]:
         """Return cached descendant terms for a canonical HPO term ID."""
         return self._descendant_cache.get(term, set())
