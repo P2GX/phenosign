@@ -61,7 +61,6 @@ Key parameters
 - `include_pmids``
   If ``True``, tracks and aggregates underlying PubMed IDs (PMIDs) contributing to the phenotypic overlaps for downstream publication verification.
 
-``n_jobs``
 
 .. warning::
 

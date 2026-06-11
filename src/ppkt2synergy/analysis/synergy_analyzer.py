@@ -60,7 +60,7 @@ class SynergyResult:
             Maximum adjusted p-value to retain.
 
         output_file : str, default="synergy_results.csv"
-            Output file path. Supported formats are ``.csv`` and ``.xlsx``.
+            Output file path. Supported formats are ``.csv``.
         """
         if self.synergy_results.empty:
             logger.warning("Synergy results table is empty. Saving empty file.")
@@ -75,15 +75,8 @@ class SynergyResult:
                 raise ValueError("adj_pval_threshold must be between 0.0 and 1.0.")
             df = df[df["adj_p_value"] < adj_pval_threshold]
 
-        ext = os.path.splitext(output_file)[1].lower()
-        if ext not in [".csv", ".xlsx"]:
-            raise ValueError(f"Unsupported file format: {ext}. Use '.csv' or '.xlsx'.")
-        
-        if ext == ".csv":
-            df.to_csv(output_file, index=False)
-        else:
-            df.to_excel(output_file, index=False)
-   
+     
+        df.to_csv(output_file, index=False)
     
     def filter_weak_synergy(
         self, 
@@ -295,18 +288,17 @@ class SynergyResult:
             z=nan_bg.values,
             x=synergy_matrix.columns,
             y=synergy_matrix.index,
-            colorscale=[[0, "#dbe7f3"], [1, "#dbe7f3"]],
+            colorscale=[[0, "#eef4fb"], [1, "#eef4fb"]],
             showscale=False,
             hoverinfo="skip",
             xgap=1,
             ygap=1,
         ))
-        colorscale = [
-            [0.0, "#eef6f5"],   
-            [0.25, "#c6e2df"],
-            [0.5, "#8fbfba"],
-            [0.75, "#4f8f8a"],
-            [1.0, "#1f4f4b"],   # deep muted teal
+        colorscale = [  
+            [0.00, "#f3e5f5"],
+            [0.35, "#ce93d8"],
+            [0.70, "#8e24aa"],
+            [1.00, "#4a148c"],  
         ]
         fig.add_trace(go.Heatmap(
                 z=display_matrix.values,
@@ -649,7 +641,6 @@ class SynergyAnalyzer:
         ontology_values = self.relationship_mask[rows, cols]
         ontology_candidate = ~np.isnan(ontology_values)
 
-        n_pairs_before_filtering = len(rows)
         n_pairs_after_ontology = np.sum(ontology_candidate)
 
         candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_synergy_calculation))[0]
@@ -661,7 +652,6 @@ class SynergyAnalyzer:
                 "[Synergy Analysis Blocked]: No HPO pairs passed the candidate joint pre-filtering selection.\n"
                 "--------------------------------------------------------------------------------------------------\n"
                 "DIAGNOSIS SUMMARY:\n"
-                f"  - Total upper-triangle HPO pairs evaluated: {n_pairs_before_filtering}\n"
                 f"  - Pairs remaining after HPO Hierarchy Masking (excluding ancestors/descendants): {n_pairs_after_ontology}\n"
                 f"  - Pairs dropped due to low joint sample size (min_individuals_for_synergy_calculation={self.min_individuals_for_synergy_calculation}): {n_pairs_after_ontology - len(pairs)}\n"
                 "SUGGESTION :\n"
@@ -748,7 +738,7 @@ class SynergyAnalyzer:
                 "adj_p_value",
                 pvals_corrected
             )
-            self.synergy_results.sort_values(by="p_value", ascending=True, inplace=True)
+            self.synergy_results.sort_values(by="adj_p_value", ascending=True, inplace=True)
         else:
             self.synergy_results["adj_p_value"] = pd.Series(dtype=float)
         

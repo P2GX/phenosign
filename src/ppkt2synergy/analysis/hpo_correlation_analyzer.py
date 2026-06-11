@@ -59,7 +59,7 @@ class CorrelationResult:
             Maximum adjusted p-value to retain.
 
         output_file : str, default="correlation_results.csv"
-            Output file path. Supported formats are ``.csv`` and ``.xlsx``.
+            Output file path. Supported formats are ``.csv``.
 
         Raises
         ------
@@ -80,14 +80,7 @@ class CorrelationResult:
                 raise ValueError("adj_pval_threshold must be between 0.0 and 1.0")
             df = df[df["adj_p_value"] < adj_pval_threshold]
 
-        ext = path.splitext(output_file)[1].lower()
-        if ext not in [".csv", ".xlsx"]:
-            raise ValueError(f"Unsupported file format: {ext}. Use '.csv' or '.xlsx'.")
-
-        if ext == ".csv":
-            df.to_csv(output_file, index=False)
-        else:
-            df.to_excel(output_file, index=False)    
+        df.to_csv(output_file, index=False)  
   
     def filter_weak_correlations(
         self, 
@@ -302,7 +295,7 @@ class CorrelationResult:
             z=nan_bg.values,
             x=coef_matrix.columns,
             y=coef_matrix.index,
-            colorscale=[[0, "#dbe7f3"], [1, "#dbe7f3"]],
+            colorscale=[[0, "#eef4fb"], [1, "#eef4fb"]],
             showscale=False,
             hoverinfo="skip",
             xgap=1,
@@ -312,7 +305,11 @@ class CorrelationResult:
                 z=display_matrix.values,
                 x=coef_matrix.columns,
                 y=coef_matrix.index,
-                colorscale="Tealgrn",
+                colorscale=[ 
+                [0.00, "#203864"],   # navy
+                [0.50, "#F7F4ED"],   # ivory
+                [1.00, "#7A1F3D"]    # wine
+                ],
                 zmin=-1,
                 zmax=1,
                 zmid=0,
@@ -567,7 +564,6 @@ class HPOCorrelationAnalyzer:
         ontology_values = self.relationship_mask[rows, cols]
         ontology_candidate = ~np.isnan(ontology_values)
 
-        n_pairs_before_filtering = len(rows)
         n_pairs_after_ontology = np.sum(ontology_candidate)
 
         candidate_idx = np.where(ontology_candidate & (counts >= self.min_individuals_for_correlation_test))[0]
@@ -580,7 +576,6 @@ class HPOCorrelationAnalyzer:
                 "[Correlation Analysis Blocked]: No HPO term pairs passed the candidate pre-filtering selection.\n"
                 "--------------------------------------------------------------------------------------------------\n"
                 "DIAGNOSIS SUMMARY:\n"
-                f"  - Total upper-triangle HPO pairs evaluated: {n_pairs_before_filtering}\n"
                 f"  - Pairs remaining after HPO Hierarchy Masking (excluding ancestors/descendants): {n_pairs_after_ontology}\n"
                 f"  - Pairs dropped due to low sample size (min_individuals_for_correlation_test={self.min_individuals_for_correlation_test}): {n_pairs_after_ontology}\n"
                 "SUGGESTION:\n"
@@ -651,7 +646,7 @@ class HPOCorrelationAnalyzer:
             _, pvals_corrected, _, _ = multipletests(pvals, method="fdr_bh")
             loc = int(self.correlation_results.columns.get_loc("p_value"))
             self.correlation_results.insert(loc + 1, "adj_p_value", pvals_corrected)
-            self.correlation_results.sort_values(by="p_value", ascending=True, inplace=True)
+            self.correlation_results.sort_values(by="adj_p_value", ascending=True, inplace=True)
         else:
             self.correlation_results["adj_p_value"] = pd.Series(dtype=float)
 

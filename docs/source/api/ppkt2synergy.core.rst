@@ -18,7 +18,7 @@ ppkt2synergy.core.features module
    :show-inheritance:
 
 ppkt2synergy.core.predicates module
----------------------------------
+-----------------------------------
 
 .. automodule:: ppkt2synergy.core.predicates
    :members:
@@ -26,7 +26,7 @@ ppkt2synergy.core.predicates module
    :show-inheritance:
 
 ppkt2synergy.core.builder module
-======================================
+-----------------------------------
 
 .. automodule:: ppkt2synergy.core.builder
    :members:
