@@ -79,9 +79,13 @@ def has_sex(sex: str) -> Callable[[ppkt.Phenopacket], bool | None]:
         if subject is None:
             return None
 
-        parsed = sex_map.get(getattr(subject, "sex", None))
-        if parsed is None:
+        raw_sex = getattr(subject, "sex", None)
+        
+        # Guard against UNKNOWN_SEX (0) or OTHER_SEX (3)
+        if raw_sex in (0, 3) or raw_sex is None:
             return None
+
+        parsed = sex_map.get(raw_sex)
 
         return parsed == normalized
 
@@ -143,6 +147,9 @@ def has_gene(symbol: str) -> Callable[[ppkt.Phenopacket], bool | None]:
                     "variation_descriptor",
                     None,
                 )
+                if variation_descriptor is None:
+                    continue
+                
                 gene_context = getattr(variation_descriptor, "gene_context", None)
 
                 if gene_context is not None:
@@ -156,7 +163,8 @@ def has_gene(symbol: str) -> Callable[[ppkt.Phenopacket], bool | None]:
 
     return predicate
 
-def has_variant_effect(transcript_id:str, variant_effect: VariantEffect)-> Callable[[Patient], bool | None]:
+
+def has_variant_effect(transcript_id: str, variant_effect: VariantEffect)-> Callable[[Patient], bool | None]:
     """
     Generate a predicate to filter GPSEA Patients by a specific molecular variant effect.
 
@@ -212,51 +220,52 @@ def has_variant_effect(transcript_id:str, variant_effect: VariantEffect)-> Calla
 
     return predicate
 
+
 def has_exon_and_variant_effect(transcript_id: str, exon: int, variant_effect: VariantEffect)-> Callable[[Patient], bool | None]:
-        """
-        Generate a predicate to identify variants spanning both a specific exon and variant effect.
+    """
+    Generate a predicate to identify variants spanning both a specific exon and variant effect.
 
-        Useful for granular genotype-phenotype analysis, such as isolating variants localized 
-        within hotspot domains (e.g., FBN1 exons 24-32).
+    Useful for granular genotype-phenotype analysis, such as isolating variants localized 
+    within hotspot domains (e.g., FBN1 exons 24-32).
 
-        Parameters
-        ----------
-        transcript_id : str
-            The target transcript identifier (e.g., "NM_000138.5").
-        exon : int
-            The specific exon number expected to be affected (1-based index).
-        variant_effect : VariantEffect
-            The expected GPSEA ``VariantEffect`` consequence.
+    Parameters
+    ----------
+    transcript_id : str
+        The target transcript identifier (e.g., "NM_000138.5").
+    exon : int
+        The specific exon number expected to be affected (1-based index).
+    variant_effect : VariantEffect
+        The expected GPSEA ``VariantEffect`` consequence.
 
-        Returns
-        -------
-        Callable[[gpsea.model.Patient], bool | None]
-            A predicate function that takes a GPSEA Patient and returns:
-            
-            - ``True`` : If a variant disrupts the designated exon AND exhibits the specified effect.
-            - ``False`` : If the transcript is tracked but no variant satisfies both criteria simultaneously.
-            - ``None`` : If the transcript model itself is not annotated within the patient's variants.
-        """
+    Returns
+    -------
+    Callable[[gpsea.model.Patient], bool | None]
+        A predicate function that takes a GPSEA Patient and returns:
+        
+        - ``True`` : If a variant disrupts the designated exon AND exhibits the specified effect.
+        - ``False`` : If the transcript is tracked but no variant satisfies both criteria simultaneously.
+        - ``None`` : If the transcript model itself is not annotated within the patient's variants.
+    """
 
-        def predicate(patient: Patient) -> bool | None:
-            saw_transcript = False
+    def predicate(patient: Patient) -> bool | None:
+        saw_transcript = False
 
-            for variant in patient.variants:
-                for txa in variant.tx_annotations:
+        for variant in patient.variants:
+            for txa in variant.tx_annotations:
 
-                    if str(txa.transcript_id) != transcript_id:
-                        continue
+                if str(txa.transcript_id) != transcript_id:
+                    continue
 
-                    saw_transcript = True
+                saw_transcript = True
 
-                    if (
-                        txa.affected_exons is not None
-                        and exon in txa.affected_exons
-                        and variant_effect in txa.variant_effects
-                    ):
-                        return True
+                if (
+                    txa.affected_exons is not None
+                    and exon in txa.affected_exons
+                    and variant_effect in txa.variant_effects
+                ):
+                    return True
 
-            return False if saw_transcript else None
+        return False if saw_transcript else None
 
-        return predicate
+    return predicate
     

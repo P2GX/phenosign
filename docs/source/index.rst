@@ -32,22 +32,30 @@ Quick Example
 
 .. code-block:: python
 
-    from ppkt2synergy import (
-        load_phenopackets_by_cohort,
-        PhenotypeDatasetBuilder,
-        HPOCorrelationAnalyzer,
-        CorrelationType
-    )
+   from pathlib import Path
+   import json
+   from ppkt2synergy import (
+      PhenotypeDatasetBuilder,
+      HPOCorrelationAnalyzer,
+   )
 
-    # Load phenopackets from a cohort
-    phenopackets = load_phenopackets_by_cohort("FBN1")
+   # Load phenopackets
+   phenopacket_dir = Path("path/to/your/fbn1_phenopackets/")
 
-    # Build dataset
-    dataset = PhenotypeDatasetBuilder(phenopackets).build()
+   phenopackets = []
+   for file_path in phenopacket_dir.glob("*.json"):
+      with open(file_path, "r", encoding="utf-8") as f:
+         data: str = f.read()
+         phenopacket: Phenopacket = Parse(data, Phenopacket())
+         phenopackets.append(phenopacket)
 
-    # Compute pairwise correlation
-    analyzer = HPOCorrelationAnalyzer(dataset)
-    analyzer.compute_correlation_matrix(correlation_type=CorrelationType.SPEARMAN)
+   # Build dataset
+   dataset = PhenotypeDatasetBuilder(phenopackets).build()
+
+   # Run correlation analysis
+   analyzer = HPOCorrelationAnalyzer(dataset)
+   results = analyzer.compute_correlation_matrix()
+   results.result_table.head()
 
 This minimal example demonstrates the workflow:
 
@@ -71,7 +79,6 @@ This minimal example demonstrates the workflow:
    :maxdepth: 1
    :caption: Usage
 
-   usage/loading
    usage/dataset
    usage/correlation
    usage/synergy
