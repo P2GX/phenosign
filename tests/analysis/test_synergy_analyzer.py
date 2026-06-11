@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 from ppkt2synergy import SynergyAnalyzer
 from ppkt2synergy.core import PhenotypeDataset
 
-from ppkt2synergy.core.features import HpoFeatureData
+from ppkt2synergy.core.features_data import HpoFeatureData
 
 
 def _make_phenopackets(ids: list[str]) -> list:
@@ -56,29 +56,29 @@ def condition(dataset):
     return dataset.get_condition(alternating, name="test_condition")
 
 def test_init(dataset):
-    analyzer = SynergyAnalyzer(dataset, n_permutations=10)
+    analyzer = SynergyAnalyzer(dataset)
 
     assert analyzer.n_features == 4
     assert analyzer.X.shape[0] == 40
 
 
 def test_compute_synergy(dataset, condition):
-    analyzer = SynergyAnalyzer(dataset, n_permutations=10)
+    analyzer = SynergyAnalyzer(dataset)
 
     res = analyzer.compute_synergy_matrix(
         condition=condition,
         n_jobs=1,
     )
 
-    assert isinstance(res, pd.DataFrame)
+    assert isinstance(res.results_table, pd.DataFrame)
 
 
 def test_filter_synergy(dataset, condition):
-    analyzer = SynergyAnalyzer(dataset, n_permutations=10)
+    analyzer = SynergyAnalyzer(dataset)
 
-    analyzer.compute_synergy_matrix(condition=condition, n_jobs=1)
+    results = analyzer.compute_synergy_matrix(condition=condition, n_jobs=1)
 
-    out = analyzer.filter_weak_synergy(
+    out = results.filter_weak_synergy(
         synergy_threshold=0.0,
         adj_pval_threshold=1.0,
     )
