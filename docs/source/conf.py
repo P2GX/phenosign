@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath('../../src'))
 project = 'ppkt2synergy'
 copyright = '2026, Jing Chen'
 author = 'Jing Chen'
-release = '0.1.0'
+release = '0.1.1'
 
 # -- General configuration ---------------------------------------------------
 

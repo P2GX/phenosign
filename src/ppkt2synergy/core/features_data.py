@@ -1,30 +1,21 @@
 from dataclasses import dataclass, field
+
 import pandas as pd
+import numpy as np
 
 @dataclass
 class HpoFeatureData:
     """
     Container for individual-level HPO feature data.
 
-    Parameters
-    ----------
-    matrix : pd.DataFrame
-        Binary HPO feature matrix with individuals as rows and HPO terms
-        as columns. Values must be ``1`` (observed), ``0`` (excluded),
-        or ``NaN`` (unknown).
-    label_mapping : dict[str, str], optional
-        Mapping from HPO term IDs to human-readable labels.
-    relationship_mask : pd.DataFrame | None, optional
-        Square mask over HPO terms with the same index and columns as
-        ``matrix.columns``. Related term pairs are encoded as ``NaN``
-        and unrelated pairs as ``0``.
+    Stores a binary HPO feature matrix together with optional
+    term labels and ontology relationship masks.
 
-    Properties
-    ----------
-    feature_names : pd.Index
-        HPO term IDs (matrix columns).
-    sample_ids : pd.Index
-        Individual identifiers (matrix index).
+    Matrix values follow the convention:
+
+        1 = observed
+        0 = excluded
+        NaN = unknown
     """
 
     matrix: pd.DataFrame
@@ -35,7 +26,6 @@ class HpoFeatureData:
         self._validate_matrix()
         self._validate_label_mapping()
         self._validate_relationship_mask()
-
 
     def _validate_matrix(self) -> None:
         if not isinstance(self.matrix, pd.DataFrame):
@@ -64,17 +54,17 @@ class HpoFeatureData:
                 f"`matrix` index must be unique. Duplicated index values: {duplicated_index}."
             )
         
-        invalid = ~self.matrix.isin([0, 1]) & self.matrix.notna()
-        if invalid.any().any():
+        matrix_values = self.matrix.values
+        invalid = (matrix_values != 0) & (matrix_values != 1) & (~np.isnan(matrix_values))
+        if invalid.any():
             bad_vals = [
-                v for v in pd.unique(self.matrix[invalid].values.ravel())
-                if pd.notna(v)
+                v for v in np.unique(matrix_values[invalid]) if not np.isnan(v)
             ]
             raise ValueError(
                 "`matrix` must contain only 0, 1, or NaN. "
                 f"Found invalid values: {bad_vals[:10]}."
             )
-        
+
     def _validate_label_mapping(self) -> None:
         if not isinstance(self.label_mapping, dict):
             raise TypeError(
@@ -101,26 +91,29 @@ class HpoFeatureData:
         if set(mask.index) != set(self.matrix.columns) or set(mask.columns) != set(self.matrix.columns):
             raise ValueError("`relationship_mask` must contain the same HPO terms as matrix columns.")
 
-        self.relationship_mask = mask.loc[self.matrix.columns, self.matrix.columns]
+        mask = mask.loc[self.matrix.columns, self.matrix.columns]
+        self.relationship_mask = mask
 
-        invalid_mask = ~mask.isin([0]) & mask.notna()
-        if invalid_mask.any().any():
+        mask_values = mask.values
+        invalid_mask = (mask_values != 0) & (~np.isnan(mask_values))
+        if invalid_mask.any():
             bad_vals = [
-                v for v in pd.unique(mask[invalid_mask].values.ravel())
-                if pd.notna(v)
+                v for v in np.unique(mask_values[invalid_mask]) if not np.isnan(v)
             ]
             raise ValueError(
                 "`relationship_mask` must contain only 0 or NaN. "
                 f"Found invalid values: {bad_vals[:10]}."
             )
 
-        if not mask.equals(mask.T):
-            raise ValueError("`relationship_mask` must be symmetric.")
+        if not mask.index.equals(mask.columns) or not mask.equals(mask.T):
+            raise ValueError("`relationship_mask` must be perfectly symmetric in both shape and labels.")
         
+
     @property
     def feature_ids(self) -> pd.Index:
         """HPO feature IDs (matrix columns)."""
         return self.matrix.columns
+
 
     @property
     def individual_ids(self) -> pd.Index:

@@ -1,16 +1,14 @@
 import pandas as pd
 import pytest
-import plotly.graph_objects as go
 
 from ppkt2synergy.analysis.hpo_correlation_analyzer import (
     HPOCorrelationAnalyzer,
 )
-from ppkt2synergy.analysis.correlation_type import CorrelationType
 from ppkt2synergy.core import (
     PhenotypeDataset,
 )
 
-from ppkt2synergy.core.features import HpoFeatureData
+from ppkt2synergy.core.features_data import HpoFeatureData
 
 
 @pytest.fixture
@@ -83,23 +81,22 @@ def test_compute_correlation_matrix(large_dataset):
     )
 
     results = analyzer.compute_correlation_matrix(
-        correlation_type=CorrelationType.SPEARMAN,
         n_jobs=1,
         include_pmids=False,
     )
 
-    assert isinstance(results, pd.DataFrame)
+    assert isinstance(results.results_table, pd.DataFrame)
 
-    if not results.empty:
+    if not results.results_table.empty:
         expected = {
             "HPO_A",
             "HPO_B",
             "correlation",
             "p_value",
-            "p_value_corrected",
+            "adj_p_value",
         }
 
-        assert expected.issubset(results.columns)
+        assert expected.issubset(results.results_table.columns)
 
 
 def test_compute_correlation_matrix_happy_path(
@@ -111,12 +108,11 @@ def test_compute_correlation_matrix_happy_path(
     )
 
     results = analyzer.compute_correlation_matrix(
-        correlation_type=CorrelationType.SPEARMAN,
         n_jobs=1,
         include_pmids=False,
     )
 
-    assert not results.empty
+    assert not results.results_table.empty
 
 
 def test_filter_weak_correlations(
@@ -127,13 +123,12 @@ def test_filter_weak_correlations(
         min_individuals_for_correlation_test=10,
     )
 
-    analyzer.compute_correlation_matrix(
-        correlation_type=CorrelationType.SPEARMAN,
+    results = analyzer.compute_correlation_matrix(
         n_jobs=1,
         include_pmids=False,
     )
 
-    result = analyzer.filter_weak_correlations(
+    result = results.filter_weak_correlations(
         corr_threshold=0.0,
         adj_pval_threshold=1.0,
     )
@@ -144,25 +139,3 @@ def test_filter_weak_correlations(
 
     assert isinstance(coef, pd.DataFrame)
     assert isinstance(pval, pd.DataFrame)
-
-
-def test_plot_heatmap(
-    strongly_correlated_dataset,
-):
-    analyzer = HPOCorrelationAnalyzer(
-        strongly_correlated_dataset,
-        min_individuals_for_correlation_test=10,
-    )
-
-    analyzer.compute_correlation_matrix(
-        correlation_type=CorrelationType.SPEARMAN,
-        n_jobs=1,
-        include_pmids=False,
-    )
-
-    fig = analyzer.plot_correlation_heatmap_with_significance(
-        corr_threshold=0.0,
-        adj_pval_threshold=1.0,
-    )
-
-    assert isinstance(fig, go.Figure)

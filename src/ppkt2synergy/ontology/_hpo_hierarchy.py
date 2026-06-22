@@ -1,10 +1,11 @@
-from typing import IO
+from typing import IO, Any
 from collections.abc import Sequence
 from collections import defaultdict
 import logging
 
 import numpy as np
 import pandas as pd
+import hpotk
 
 from ._term_manager import HPOTermManager
 
@@ -20,28 +21,24 @@ class HPOHierarchyEngine:
     - Construction of pairwise relationship masks for downstream analyses.
     - Canonicalization of HPO term IDs and merging of duplicate columns.
 
-
     Input matrices are expected to use:
     
         1 = observed
         0 = excluded
         NaN = unknown
 
-    Duplicate columns mapping to the same canonical HPO ID are merged using ``max()``, 
-    prioritizing 1 > 0 > NaN. Conflicts (1 vs 0) generate warnings.
-
     Invalid HPO terms are removed during preprocessing.
     """
 
     def __init__(
         self,
-        hpo_file: str | IO | None = None,
+        hpo_file: str | IO[Any] | None = None,
         release: str | None = None,
     ) -> None:
         self._term_manager = HPOTermManager(hpo_file=hpo_file, release=release)
-        
+
     @property
-    def hpo(self):
+    def hpo(self) -> hpotk.MinimalOntology:
         """Direct access to underlying HPO ontology (read-only)."""
         return self._term_manager.hpo
 
@@ -62,7 +59,6 @@ class HPOHierarchyEngine:
             HPO status matrix with individuals as rows and HPO terms as columns.
             Values should be 1 (observed), 0 (excluded), or NaN (unknown).
 
-
         Returns
         -------
         pd.DataFrame
@@ -70,14 +66,17 @@ class HPOHierarchyEngine:
         """
         if matrix.empty:
             return matrix.copy()
-        
-        self._check_mapping_conflicts(matrix)
 
         all_present_terms = set(matrix.columns)
         valid_terms = self._term_manager.prepare_terms(all_present_terms)
+
+        self._check_mapping_conflicts(matrix)
+
         id_mapping = self._term_manager.get_id_mapping()
 
         matrix = matrix.rename(columns=id_mapping)
+
+        # Use max() since 1 (observed) > 0 (excluded), effectively prioritizing 1
         matrix = matrix.T.groupby(level=0).max().T
         matrix = matrix.loc[:, matrix.columns.isin(valid_terms)]
         present_terms = set(matrix.columns)
@@ -85,30 +84,33 @@ class HPOHierarchyEngine:
         ancestors_lookup = {t: self._term_manager.get_ancestors(t) for t in present_terms}
         descendants_lookup = {t: self._term_manager.get_descendants(t) for t in present_terms}
 
-        new_ones = {}
-        new_zeros = {}
+        propagated_observed: dict[str, pd.Series] = {}
+        propagated_excluded: dict[str, pd.Series] = {}
 
-        for term in present_terms:
-            if term not in matrix.columns:
-                continue
-                
+        for term in present_terms:     
             observed_mask = matrix[term] == 1
             if observed_mask.any():
                 for ancestor in ancestors_lookup.get(term, []):
                     if ancestor == term:
                         continue
-                    new_ones[ancestor] = new_ones.get(ancestor, observed_mask) | observed_mask
+                    if ancestor in propagated_observed:
+                        propagated_observed[ancestor] = propagated_observed[ancestor] | observed_mask
+                    else:
+                        propagated_observed[ancestor] = observed_mask
 
             excluded_mask = matrix[term] == 0
             if excluded_mask.any():
                 for descendant in descendants_lookup.get(term, []):
                     if descendant == term:
                         continue
-                    new_zeros[descendant] = new_zeros.get(descendant, excluded_mask) | excluded_mask
+                    if descendant in propagated_excluded:
+                        propagated_excluded[descendant] = propagated_excluded[descendant] | excluded_mask
+                    else:
+                        propagated_excluded[descendant] = excluded_mask
 
         for term in present_terms:
-            mask_1 = new_ones.get(term, None)
-            mask_0 = new_zeros.get(term, None)
+            mask_1 = propagated_observed.get(term, None)
+            mask_0 = propagated_excluded.get(term, None)
             
             orig_1 = matrix[term] == 1
             orig_0 = matrix[term] == 0
@@ -136,9 +138,11 @@ class HPOHierarchyEngine:
                 matrix.loc[update_mask_0, term] = 0
 
         return matrix
-    
 
-    def _check_mapping_conflicts(self, matrix: pd.DataFrame) -> None:
+    def _check_mapping_conflicts(
+        self, 
+        matrix: pd.DataFrame
+    ) -> None:
         """
         Check for many-to-one HPO term mapping conflicts in the matrix before merging.
 
@@ -190,7 +194,6 @@ class HPOHierarchyEngine:
                     conflict_samples if len(conflict_samples) <= 5 else f"{conflict_samples[:5]}... (Total: {len(conflict_samples)})"
                 )
     
-
     def build_relationship_mask(
         self, 
         terms: Sequence[str]
@@ -215,21 +218,20 @@ class HPOHierarchyEngine:
             related terms (ancestor, descendant, or self) and ``0`` indicates
             unrelated terms.
         """
-        terms = list(terms)
-        term_to_idx = {t: i for i, t in enumerate(terms)}
-        N = len(terms)
+        terms_list = list(terms)
+        term_to_idx = {t: i for i, t in enumerate(terms_list)}
+        N = len(terms_list)
         mask = np.zeros((N, N), dtype=float)
 
-        for i, term in enumerate(terms):
+        for i, term in enumerate(terms_list):
             related = self._term_manager.get_ancestors(term) | self._term_manager.get_descendants(term)
             related_idx = [term_to_idx[t] for t in related if t in term_to_idx]
             mask[i, related_idx] = np.nan
             mask[related_idx, i] = np.nan
             mask[i, i] = np.nan
 
-        mask_df = pd.DataFrame(mask, index=terms, columns=terms)
+        mask_df = pd.DataFrame(mask, index=terms_list, columns=terms_list)
         return mask_df
-    
 
     def get_labels(self) -> dict[str, str]:
         """Return cached HPO term labels."""

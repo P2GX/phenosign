@@ -16,3 +16,21 @@ ppkt2synergy.core.features module
    :members:
    :undoc-members:
    :show-inheritance:
+
+ppkt2synergy.core.predicates module
+-----------------------------------
+
+.. automodule:: ppkt2synergy.core.predicates
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+ppkt2synergy.core.builder module
+-----------------------------------
+
+.. automodule:: ppkt2synergy.core.builder
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+   

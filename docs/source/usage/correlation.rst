@@ -18,13 +18,12 @@ Correlation measures the association between two phenotypes:
 Correlation methods
 -------------------
 
-The analyzer supports multiple correlation measures:
+The analyzer supports correlation measures specifically optimized for binary (presence/absence) phenotype data:
 
-- ``SPEARMAN`` (default) — general-purpose rank-based correlation  
-- ``KENDALL`` — alternative rank-based measure  
-- ``PHI`` — designed for binary data  
+- ``PHI`` — Phi coefficient ($\phi$), which mathematically equivalent to Pearson correlation for two binary variables. It measures the strength and direction of linear association between HPO terms.
+- ``FISHER`` — Fisher's Exact Test, which computes the exact hypergeometric probability of the contingency table. It provides highly robust p-values alongside odds ratios, making it the preferred method for testing non-random associations in low-frequency HPO terms.
 
-For most use cases, the default setting provides a good starting point.
+For most clinical phenotypes, ``FISHER`` provides a reliable statistical significance cutoff, while ``PHI`` serves as an excellent standardized effect size for downstream network visualizations.
 
 
 Core usage
@@ -32,19 +31,18 @@ Core usage
 
 .. code-block:: python
 
-    from ppkt2synergy import HPOCorrelationAnalyzer, CorrelationType
+    from ppkt2synergy import HPOCorrelationAnalyzer
 
     analyzer = HPOCorrelationAnalyzer(
         dataset=dataset,
         min_individuals_for_correlation_test=30,
-        min_cooccurrence_count=1,
     )
 
     results = analyzer.compute_correlation_matrix(
-        correlation_type=CorrelationType.SPEARMAN,
         n_jobs=-1,
         include_pmids=False,
     )
+    results.results_table.head()
 
 The main parameters control data filtering, correlation type, and parallelization.
 
@@ -56,13 +54,13 @@ Key parameters
   Minimum number of individuals required to evaluate a feature pair.  
   Higher values increase robustness, while lower values allow more pairs to be tested.
 
-- ``min_cooccurrence_count``  
-  Minimum number of individuals in whom **both** HPO terms must be observed
-  for the pair to be tested. Helps exclude pairs with very limited joint support.
-
 - ``n_jobs``  
   Number of parallel jobs for computing pairwise correlations.
   Set to ``-1`` to use all available CPU cores.
+
+- `include_pmids``
+  If ``True``, tracks and aggregates underlying PubMed IDs (PMIDs) contributing to the phenotypic overlaps for downstream publication verification.
+
 
 .. warning::
 
@@ -81,9 +79,9 @@ Save results
 
 .. code-block:: python
 
-    analyzer.save_correlation_results(
-        corr_threshold=0.55,
-        adj_pval_threshold=1.0,
+    results.save_correlation_results(
+        corr_threshold=0.1,
+        adj_pval_threshold=0.05,
         output_file="correlation_results.csv",
     )
 
@@ -96,15 +94,12 @@ Visualization
 
 .. code-block:: python
 
-    fig = analyzer.plot_correlation_heatmap_with_significance(
-        corr_threshold=0.55,
-        adj_pval_threshold=0.1,
+    results.plot_correlation_heatmap_with_significance(
+        corr_threshold=0.1,
+        adj_pval_threshold=0.05,
     )
 
-    fig.show()
-
-    analyzer.save_correlation_heatmap(
-        fig,
+    results.save_correlation_heatmap(
         output_file="correlation_heatmap.html",
     )
 

@@ -18,6 +18,15 @@ about a condition compared to each feature individually:
 Synergy is computed using mutual information with permutation-based significance testing.
 
 
+Adaptive Permutation Testing (Early-Stopping)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To optimize massive parallel computations across thousands of HPO pairs, **ppkt2synergy** implements an adaptive permutation framework:
+
+- **Weak signals are terminated early** once the accumulated random shuffles cross a specific hit threshold (``target_successes``), preventing the CPU from wasting cycles on uninformative associations.
+- **Strong synergistic signals automatically scale up** to deeper permutation ceilings (``max_perms``) to provide ultra-high statistical resolution, ensuring survival during strict multi-test False Discovery Rate (FDR) corrections.
+
+
 Inspect the dataset
 -------------------
 
@@ -40,17 +49,12 @@ Core usage
 
     synergy_analyzer = SynergyAnalyzer(
         dataset=dataset,
-        n_permutations=1000,
         min_individuals_for_synergy_calculation=40,
         random_state=42,
     )
 
 Key parameters
 ^^^^^^^^^^^^^^
-
-``n_permutations``
-  Number of permutations used for significance testing.
-  Higher values improve stability but increase runtime.
 
 ``min_individuals_for_synergy_calculation``
   Minimum number of individuals required to evaluate a feature pair.
@@ -185,11 +189,28 @@ Pass a condition to ``compute_synergy_matrix()``:
     synergy_results = synergy_analyzer.compute_synergy_matrix(
         condition=condition,
         n_jobs=-1,
+        min_perms = 500,
+        max_perms = 10000,
+        target_successes = 20,
     )
 
-    synergy_results.head()
+    synergy_results.results_table.head()
 
-Set ``n_jobs=-1`` to use all available CPU cores.
+
+Adaptive parameters tuning guide
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``min_perms`` (default: 500)
+  The mandatory baseline iterations executed for every single HPO pair before early-stopping evaluation. For small-cohort or rare disease cohorts, raising this to ``500`` is highly recommended to suppress initial sampling noise.
+
+``max_perms`` (default: 10000)
+  The maximum ceiling allowed for top-tier synergistic pairs. For low-sample cohorts typical in rare disease research, setting this between ``10000`` and ``50000`` is statistically sufficient.
+
+``target_successes`` (default: 20)
+  The exit threshold for early-stopping. Shuffling stops immediately if simulated metrics equal or exceed the observed synergy score this many times. Setting this to ``20`` balances high-fidelity filtering and speed.
+
+``n_jobs`` (default: -1)
+  Number of parallel workers. ``-1`` utilizes all available CPU cores.
 
 
 Save results
@@ -197,9 +218,9 @@ Save results
 
 .. code-block:: python
 
-    synergy_analyzer.save_synergy_results(
-        synergy_threshold=0.08,
-        adj_pval_threshold=0.2,
+    synergy_results.save_synergy_results(
+        synergy_threshold=0.01,
+        adj_pval_threshold=0.05,
         output_file="synergy_results.csv",
     )
 
@@ -209,16 +230,13 @@ Visualization
 
 .. code-block:: python
 
-    fig = synergy_analyzer.plot_synergy_heatmap(
-        synergy_threshold=0.08,
-        adj_pval_threshold=0.2,
+    synergy_results.plot_synergy_heatmap(
+        synergy_threshold=0.01,
+        adj_pval_threshold=0.05,
         condition_name="disease:Marfan syndrome",
     )
 
-    fig.show()
-
-    synergy_analyzer.save_synergy_heatmap(
-        fig,
+    synergy_results.save_synergy_heatmap(
         output_file="synergy_heatmap.html",
     )
 
