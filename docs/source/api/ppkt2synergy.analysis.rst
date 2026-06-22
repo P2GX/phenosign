@@ -1,26 +1,26 @@
-ppkt2synergy.analysis package
+phenosyn.analysis package
 =============================
 
-ppkt2synergy.analysis.correlation\_type module
+phenosyn.analysis.correlation\_type module
 ----------------------------------------------
 
-.. automodule:: ppkt2synergy.analysis.correlation_type
+.. automodule:: phenosyn.analysis.correlation_type
    :members:
    :undoc-members:
    :show-inheritance:
 
-ppkt2synergy.analysis.hpo\_correlation\_analyzer module
+phenosyn.analysis.hpo\_correlation\_analyzer module
 -------------------------------------------------------
 
-.. automodule:: ppkt2synergy.analysis.hpo_correlation_analyzer
+.. automodule:: phenosyn.analysis.hpo_correlation_analyzer
    :members:
    :undoc-members:
    :show-inheritance:
 
-ppkt2synergy.analysis.synergy\_analyzer module
+phenosyn.analysis.synergy\_analyzer module
 ----------------------------------------------
 
-.. automodule:: ppkt2synergy.analysis.synergy_analyzer
+.. automodule:: phenosyn.analysis.synergy_analyzer
    :members:
    :undoc-members:
    :show-inheritance:

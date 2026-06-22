@@ -1,10 +1,10 @@
-ppkt2synergy.ontology package
+phenosyn.ontology package
 =============================
 
-ppkt2synergy.ontology.hierarchy module
+phenosyn.ontology.hierarchy module
 --------------------------------------
 
-.. automodule:: ppkt2synergy.ontology._hpo_hierarchy
+.. automodule:: phenosyn.ontology._hpo_hierarchy
    :members:
    :undoc-members:
    :show-inheritance:

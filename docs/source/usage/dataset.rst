@@ -16,7 +16,7 @@ then pass the resulting list into the builder.
     from pathlib import Path
     from google.protobuf.json_format import Parse
     from phenopackets import Phenopacket
-    from ppkt2synergy import PhenotypeDatasetBuilder
+    from phenosyn import PhenotypeDatasetBuilder
 
     # 1. Locate your local phenopacket directory
     phenopacket_dir = Path("path/to/your/fbn1_phenopackets/")

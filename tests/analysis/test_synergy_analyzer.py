@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 from unittest.mock import MagicMock
 
-from ppkt2synergy import SynergyAnalyzer
-from ppkt2synergy.core import PhenotypeDataset
+from phenosyn import SynergyAnalyzer
+from phenosyn.core import PhenotypeDataset
 
-from ppkt2synergy.core.features_data import HpoFeatureData
+from phenosyn.core.features_data import HpoFeatureData
 
 
 def _make_phenopackets(ids: list[str]) -> list:

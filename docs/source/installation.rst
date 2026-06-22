@@ -6,7 +6,7 @@ Install from PyPI (recommended)
 
 .. code-block:: bash
 
-    pip install ppkt2synergy
+    pip install phenosyn
 
 ---
 
@@ -25,8 +25,8 @@ Then clone the repository and install in editable mode:
 
 .. code-block:: bash
 
-    git clone https://github.com/P2GX/ppkt2synergy.git
-    cd ppkt2synergy
+    git clone https://github.com/P2GX/phenosyn.git
+    cd phenosyn
     pip install -e .
 
 ---

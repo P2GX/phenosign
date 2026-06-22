@@ -1,14 +1,14 @@
 import pandas as pd
 import pytest
 
-from ppkt2synergy.analysis.hpo_correlation_analyzer import (
+from phenosyn.analysis.hpo_correlation_analyzer import (
     HPOCorrelationAnalyzer,
 )
-from ppkt2synergy.core import (
+from phenosyn.core import (
     PhenotypeDataset,
 )
 
-from ppkt2synergy.core.features_data import HpoFeatureData
+from phenosyn.core.features_data import HpoFeatureData
 
 
 @pytest.fixture
