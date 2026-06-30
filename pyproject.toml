@@ -5,14 +5,14 @@ requires = ["setuptools>=65.6.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "phenosyn"
+name = "phenosign"
 requires-python = ">=3.10"
 description = "A Python package for synergy and correlation analysis of HPO annotations in GA4GH phenopacket cohorts"
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
     {name = "Peter Robinson", email="peter.robinson@bih-charite.de"},
-    {name = "Daniel Danis", email="daniel.gordon.danis@protonmail.com"},
     {name = "Jing Chen", email="jing.chen@bih-charite.de"},
+    {name = "Daniel Danis", email="daniel.gordon.danis@protonmail.com"},
 ]
 license = { file = "LICENSE" }
 classifiers = [
@@ -59,17 +59,17 @@ docs = [
 
 
 [project.urls]
-homepage = "https://github.com/P2GX/phenosyn"
-repository = "https://github.com/P2GX/phenosyn.git"
-documentation = "https://P2GX.github.io/phenosyn/"
-bugtracker = "https://github.com/P2GX/phenosyn/issues"
+homepage = "https://github.com/P2GX/phenosign"
+repository = "https://github.com/P2GX/phenosign.git"
+documentation = "https://P2GX.github.io/phenosign/"
+bugtracker = "https://github.com/P2GX/phenosign/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 zip-safe = false
 
 [tool.setuptools.dynamic]
-version = { attr = "phenosyn.__version__" }
+version = { attr = "phenosign.__version__" }
 
 
 

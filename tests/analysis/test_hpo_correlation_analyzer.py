@@ -1,14 +1,14 @@
 import pandas as pd
 import pytest
 
-from phenosyn.analysis.hpo_correlation_analyzer import (
+from phenosign.analysis.hpo_correlation_analyzer import (
     HPOCorrelationAnalyzer,
 )
-from phenosyn.core import (
+from phenosign.core import (
     PhenotypeDataset,
 )
 
-from phenosyn.core.features_data import HpoFeatureData
+from phenosign.core.features_data import HpoFeatureData
 
 
 @pytest.fixture

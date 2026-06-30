@@ -1,26 +1,26 @@
-phenosyn.analysis package
+phenosign.analysis package
 =============================
 
-phenosyn.analysis.correlation\_type module
+phenosign.analysis.correlation\_type module
 ----------------------------------------------
 
-.. automodule:: phenosyn.analysis.correlation_type
+.. automodule:: phenosign.analysis.correlation_type
    :members:
    :undoc-members:
    :show-inheritance:
 
-phenosyn.analysis.hpo\_correlation\_analyzer module
+phenosign.analysis.hpo\_correlation\_analyzer module
 -------------------------------------------------------
 
-.. automodule:: phenosyn.analysis.hpo_correlation_analyzer
+.. automodule:: phenosign.analysis.hpo_correlation_analyzer
    :members:
    :undoc-members:
    :show-inheritance:
 
-phenosyn.analysis.synergy\_analyzer module
+phenosign.analysis.synergy\_analyzer module
 ----------------------------------------------
 
-.. automodule:: phenosyn.analysis.synergy_analyzer
+.. automodule:: phenosign.analysis.synergy_analyzer
    :members:
    :undoc-members:
    :show-inheritance:

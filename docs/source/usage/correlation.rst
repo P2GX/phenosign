@@ -31,7 +31,7 @@ Core usage
 
 .. code-block:: python
 
-    from phenosyn import HPOCorrelationAnalyzer
+    from phenosign import HPOCorrelationAnalyzer
 
     analyzer = HPOCorrelationAnalyzer(
         dataset=dataset,

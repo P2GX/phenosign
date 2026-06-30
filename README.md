@@ -1,12 +1,12 @@
-# phenosyn
+# phenosign
 
-**phenosyn** is a Python library for analyzing correlations and synergy in [GA4GH Phenopacket](https://www.ga4gh.org/product/phenopackets/) cohorts. 
+**phenosign** is a Python library for analyzing correlations and synergy in [GA4GH Phenopacket](https://www.ga4gh.org/product/phenopackets/) cohorts. 
 ---
 
 ## Installation
 
 ```bash
-pip install phenosyn
+pip install phenosign
 ```
 
 
@@ -29,7 +29,7 @@ This package enables the identification of pairwise associations and higher-orde
 ```python
 from pathlib import Path
 import json
-from phenosyn import (
+from phenosign import (
     PhenotypeDatasetBuilder,
     HPOCorrelationAnalyzer,
 )
