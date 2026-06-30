@@ -1,34 +1,34 @@
-ppkt2synergy.core package
+phenosign.core package
 =========================
 
-ppkt2synergy.core.dataset module
+phenosign.core.dataset module
 --------------------------------
 
-.. automodule:: ppkt2synergy.core.dataset
+.. automodule:: phenosign.core.dataset
    :members:
    :undoc-members:
    :show-inheritance:
 
-ppkt2synergy.core.features module
+phenosign.core.features module
 ---------------------------------
 
-.. automodule:: ppkt2synergy.core.features
+.. automodule:: phenosign.core.features
    :members:
    :undoc-members:
    :show-inheritance:
 
-ppkt2synergy.core.predicates module
+phenosign.core.predicates module
 -----------------------------------
 
-.. automodule:: ppkt2synergy.core.predicates
+.. automodule:: phenosign.core.predicates
    :members:
    :undoc-members:
    :show-inheritance:
 
-ppkt2synergy.core.builder module
+phenosign.core.builder module
 -----------------------------------
 
-.. automodule:: ppkt2synergy.core.builder
+.. automodule:: phenosign.core.builder
    :members:
    :undoc-members:
    :show-inheritance:

@@ -1,11 +1,11 @@
-ppkt2synergy API
+phenosign API
 =================
 
-Core modules of ppkt2synergy.
+Core modules of phenosign.
 
 .. toctree::
    :maxdepth: 2
 
-   ppkt2synergy.core
-   ppkt2synergy.analysis
-   ppkt2synergy.ontology
+   phenosign.core
+   phenosign.analysis
+   phenosign.ontology
