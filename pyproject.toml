@@ -10,10 +10,10 @@ requires-python = ">=3.10"
 description = "A Python package for synergy and correlation analysis of HPO annotations in GA4GH phenopacket cohorts"
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
-    {name = "Peter Robinson", email="peter.robinson@bih-charite.de"},
     {name = "Jing Chen", email="jing.chen@bih-charite.de"},
-    {name = "Daniel Danis", email="daniel.gordon.danis@protonmail.com"},
 ]
+maintainers =[{name = "Peter Robinson", email="peter.robinson@bih-charite.de"},
+             {name = "Daniel Danis", email="daniel.danis@bih-charite.de"},]
 license = { file = "LICENSE" }
 classifiers = [
     "Development Status :: 3 - Alpha",
