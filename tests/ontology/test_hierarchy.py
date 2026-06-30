@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ppkt2synergy.ontology import HPOHierarchyEngine
+from phenosign.ontology import HPOHierarchyEngine
 
 
 TEST_DIR = pathlib.Path(__file__).parent.parent.resolve()

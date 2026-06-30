@@ -21,7 +21,7 @@ Synergy is computed using mutual information with permutation-based significance
 Adaptive Permutation Testing (Early-Stopping)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-To optimize massive parallel computations across thousands of HPO pairs, **ppkt2synergy** implements an adaptive permutation framework:
+To optimize massive parallel computations across thousands of HPO pairs, **phenosign** implements an adaptive permutation framework:
 
 - **Weak signals are terminated early** once the accumulated random shuffles cross a specific hit threshold (``target_successes``), preventing the CPU from wasting cycles on uninformative associations.
 - **Strong synergistic signals automatically scale up** to deeper permutation ceilings (``max_perms``) to provide ultra-high statistical resolution, ensuring survival during strict multi-test False Discovery Rate (FDR) corrections.
@@ -45,7 +45,7 @@ Core usage
 
 .. code-block:: python
 
-    from ppkt2synergy import SynergyAnalyzer
+    from phenosign import SynergyAnalyzer
 
     synergy_analyzer = SynergyAnalyzer(
         dataset=dataset,
@@ -71,7 +71,7 @@ Synergy analysis requires a **condition** — a binary vector indicating which
 individuals belong to the positive group (1) and which do not (0).
 
 Conditions are constructed by passing a **predicate function** to the dataset.
-**ppkt2synergy** provides built-in helper functions to generate common predicates.
+**phenosign** provides built-in helper functions to generate common predicates.
 
 .. note::
 
@@ -105,7 +105,7 @@ The following helpers work at the phenopacket level and are passed to
 
 .. code-block:: python
 
-    from ppkt2synergy import has_disease, has_sex, has_gene
+    from phenosign import has_disease, has_sex, has_gene
 
     # By disease
     condition = dataset.get_condition(
@@ -145,7 +145,7 @@ Filter by variant effect on a specific transcript:
 .. code-block:: python
 
     from gpsea.model import VariantEffect
-    from ppkt2synergy import has_variant_effect
+    from phenosign import has_variant_effect
 
     condition = dataset.get_variant_condition(
         has_variant_effect(
@@ -159,7 +159,7 @@ Filter by variant effect restricted to a specific exon:
 
 .. code-block:: python
 
-    from ppkt2synergy import has_exon_and_variant_effect
+    from phenosign import has_exon_and_variant_effect
 
     condition = dataset.get_variant_condition(
         has_exon_and_variant_effect(
