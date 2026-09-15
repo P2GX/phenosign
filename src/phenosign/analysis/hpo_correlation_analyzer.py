@@ -236,8 +236,8 @@ class CorrelationResult:
                 "P_value": row["p_value"],
                 "P_value_corrected": row.get("adj_p_value", None),
                 "Count_00": row["n(A:E/B:E)"],
-                "Count_01": row["n(A:O/B:E)"],  # swapped
-                "Count_10": row["n(A:E/B:O)"],  # swapped
+                "Count_01": row["n(A:E/B:O)"],  # swapped
+                "Count_10": row["n(A:O/B:E)"],  # swapped
                 "Count_11": row["n(A:O/B:O)"],
                 "n_individuals": row["n_individuals"],
             }
